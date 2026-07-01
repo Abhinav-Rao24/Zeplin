@@ -14,6 +14,8 @@ import (
 // deepgramCallback implements msginterfaces.LiveMessageCallback
 type deepgramCallback struct{}
 
+func (c *deepgramCallback) Open(or *msginterfaces.OpenResponse) error { return nil }
+
 func (c *deepgramCallback) Message(mr *msginterfaces.MessageResponse) error {
 	if len(mr.Channel.Alternatives) > 0 {
 		transcript := mr.Channel.Alternatives[0].Transcript

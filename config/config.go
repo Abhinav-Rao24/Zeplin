@@ -15,6 +15,7 @@ type Config struct {
 	LivekitAPIKey    string
 	LivekitAPISecret string
 	TTSAPIKey        string
+	DeepgramAPIKey   string
 }
 
 // Load verifies and loads required configuration variables from a .env file and environment
@@ -30,6 +31,7 @@ func Load() *Config {
 		"LIVEKIT_API_KEY",
 		"LIVEKIT_API_SECRET",
 		"TTS_API_KEY",
+		"DEEPGRAM_API_KEY",
 	}
 
 	var missingKeys []string
@@ -51,5 +53,6 @@ func Load() *Config {
 		LivekitAPIKey:    strings.TrimSpace(os.Getenv("LIVEKIT_API_KEY")),
 		LivekitAPISecret: strings.TrimSpace(os.Getenv("LIVEKIT_API_SECRET")),
 		TTSAPIKey:        strings.TrimSpace(os.Getenv("TTS_API_KEY")),
+		DeepgramAPIKey:   strings.TrimSpace(os.Getenv("DEEPGRAM_API_KEY")),
 	}
 }

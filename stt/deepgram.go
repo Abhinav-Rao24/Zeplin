@@ -12,7 +12,9 @@ import (
 )
 
 // deepgramCallback implements msginterfaces.LiveMessageCallback
-type deepgramCallback struct{}
+type deepgramCallback struct {
+	onTranscript func(transcript string, isFinal bool)
+}
 
 func (c *deepgramCallback) Open(or *msginterfaces.OpenResponse) error { return nil }
 
@@ -20,7 +22,11 @@ func (c *deepgramCallback) Message(mr *msginterfaces.MessageResponse) error {
 	if len(mr.Channel.Alternatives) > 0 {
 		transcript := mr.Channel.Alternatives[0].Transcript
 		if transcript != "" {
-			fmt.Printf("[Live Transcript] %s\n", transcript)
+			if c.onTranscript != nil {
+				c.onTranscript(transcript, mr.IsFinal)
+			} else {
+				fmt.Printf("[Live Transcript] (final: %t) %s\n", mr.IsFinal, transcript)
+			}
 		}
 	}
 	return nil
@@ -43,7 +49,7 @@ type DeepgramStreamSTT struct {
 }
 
 // NewDeepgramStreamSTT creates and starts a new Deepgram live transcription session.
-func NewDeepgramStreamSTT(apiKey string) (*DeepgramStreamSTT, error) {
+func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, isFinal bool)) (*DeepgramStreamSTT, error) {
 	os.Setenv("DEEPGRAM_API_KEY", apiKey)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -54,7 +60,9 @@ func NewDeepgramStreamSTT(apiKey string) (*DeepgramStreamSTT, error) {
 		SmartFormat: true,
 	}
 
-	cb := &deepgramCallback{}
+	cb := &deepgramCallback{
+		onTranscript: onTranscript,
+	}
 
 	// Initialize the websocket client
 	ws, err := listen.NewWebSocketUsingCallbackWithDefaults(ctx, tOptions, cb)

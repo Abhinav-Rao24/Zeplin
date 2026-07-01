@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/Abhinav-Rao24/Zeplin/brain"
 	"github.com/Abhinav-Rao24/Zeplin/config"
-	"github.com/Abhinav-Rao24/Zeplin/stt"
+	"github.com/Abhinav-Rao24/Zeplin/memory"
 	"github.com/Abhinav-Rao24/Zeplin/transport"
 )
 
@@ -18,22 +20,27 @@ func main() {
 	cfg := config.Load()
 	log.Println("Configuration loaded successfully.")
 
-	// 1. Initialize Deepgram STT
-	sttEngine, err := stt.NewDeepgramStreamSTT(cfg.DeepgramAPIKey)
-	if err != nil {
-		log.Fatalf("Failed to initialize STT engine: %v", err)
-	}
-	defer sttEngine.Close()
+	// Initialize thread-safe memory store
+	memStore := memory.NewInMemoryStore()
+	log.Println("Session Memory Store initialized.")
 
-	// 2. Connect to LiveKit Room and hook up the STT Engine
-	room, err := transport.ConnectLiveKit(cfg.LivekitURL, cfg.LivekitAPIKey, cfg.LivekitAPISecret, sttEngine)
+	// Initialize Eino brain layer
+	ctx := context.Background()
+	brainEngine, err := brain.NewBrain(ctx, cfg.GeminiAPIKey, memStore)
+	if err != nil {
+		log.Fatalf("Failed to initialize Eino brain: %v", err)
+	}
+	log.Println("Eino Brain and Gemini 2.5 Flash node initialized successfully.")
+
+	// Connect to LiveKit Room and hook up the STT Engine and Eino Brain
+	room, err := transport.ConnectLiveKit(cfg.LivekitURL, cfg.LivekitAPIKey, cfg.LivekitAPISecret, cfg.DeepgramAPIKey, brainEngine)
 	if err != nil {
 		log.Fatalf("Failed to connect to LiveKit: %v", err)
 	}
 	defer room.Disconnect()
 
-	// 3. Keep the application running
-	log.Println("Voice Ingestion Layer is now active. Waiting for participants...")
+	// Keep the application running
+	log.Println("Voice Ingestion & AI Brain Layer is now active. Waiting for participants...")
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan

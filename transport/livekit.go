@@ -10,7 +10,9 @@ import (
 	"github.com/Abhinav-Rao24/Zeplin/brain"
 	"github.com/Abhinav-Rao24/Zeplin/stt"
 	"github.com/Abhinav-Rao24/Zeplin/tts"
+	"github.com/aflyingHusky/go-webrtcvad"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/opus"
 	"github.com/pion/webrtc/v4"
 	pionmedia "github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
@@ -35,10 +37,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					log.Printf("Audio track subscribed from %s", sessionID)
 
 					triggerInterrupt := func() {
-						// Only interrupt if the agent is actually speaking (pacing audio)
-						// NOT just because the brain is thinking, to avoid killing pending requests
-						// from ambient noise or self-echo.
-						if !isPacingActive.Load() {
+						// Only interrupt if the agent is actively thinking or speaking
+						isSpeaking := isBrainActive.Load() || isPacingActive.Load()
+						if !isSpeaking {
 							return
 						}
 
@@ -87,11 +88,6 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							isBrainActive.Store(false)
 							log.Printf("[Brain] Turn ended. BrainActive=%v, PacingActive=%v", isBrainActive.Load(), isPacingActive.Load())
 						}()
-					}, func() {
-						// SpeechStarted = Deepgram detected voice energy. We log it but do NOT
-						// trigger an interrupt here — energy alone is too unreliable (self-echo,
-						// ambient noise). Barge-in is confirmed by interim transcribed words above.
-						log.Printf("[STT] SpeechStarted event (no action). PacingActive=%v", isPacingActive.Load())
 					})
 					if err != nil {
 						log.Printf("Error creating STT engine for %s: %v", sessionID, err)
@@ -109,10 +105,34 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					
 					log.Println("Successfully attached OGG writer to incoming track")
 
-					// Read RTP packets and write them to Deepgram as OGG
+					// Read RTP packets, run local WebRTC VAD, and write them to Deepgram as OGG
 					go func() {
 						defer ogg.Close()
 						defer sttEngine.Close()
+
+						// Initialize local WebRTC VAD
+						vad, err := webrtcvad.New()
+						if err != nil {
+							log.Printf("Error creating local VAD: %v", err)
+							return
+						}
+						// Configure to aggressive mode (3) to strictly filter background noise
+						if err := vad.SetMode(3); err != nil {
+							log.Printf("Error setting VAD mode: %v", err)
+							return
+						}
+
+						// Initialize Opus Decoder (48kHz, 2 channels stereo)
+						dec, err := opus.NewDecoderWithOutput(48000, 2)
+						if err != nil {
+							log.Printf("Error creating Opus decoder: %v", err)
+							return
+						}
+
+						pcmBuf := make([]int16, 11520) // max possible Opus frame size is 120ms
+						var vadBuffer []byte
+						consecutivePositive := 0
+
 						for {
 							rtpPacket, _, err := track.ReadRTP()
 							if err != nil {
@@ -120,9 +140,48 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								return
 							}
 							
+							// 1. Write to OGG container for Deepgram STT
 							if err := ogg.WriteRTP(rtpPacket); err != nil {
 								log.Printf("Error writing RTP to OGG container: %v", err)
 								return
+							}
+
+							// 2. Decode Opus payload to raw PCM
+							if len(rtpPacket.Payload) == 0 {
+								continue
+							}
+
+							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcmBuf)
+							if err != nil {
+								continue
+							}
+
+							// 3. Downmix stereo -> mono, decimate 6:1 (48kHz stereo -> 8kHz mono)
+							for i := 0; i < sampleCount; i += 6 {
+								left := pcmBuf[2*i]
+								right := pcmBuf[2*i+1]
+								mono := int16((int32(left) + int32(right)) / 2)
+
+								// Convert to little-endian bytes and append to VAD buffer
+								vadBuffer = append(vadBuffer, byte(mono&0xff), byte(mono>>8))
+							}
+
+							// 4. Feed 320-byte (20ms) chunks to VAD Process(8000, frame)
+							for len(vadBuffer) >= 320 {
+								chunk := vadBuffer[:320]
+								activeVoice, err := vad.Process(8000, chunk)
+								if err != nil {
+									log.Printf("VAD process error: %v", err)
+								} else if activeVoice {
+									consecutivePositive++
+									if consecutivePositive >= 3 {
+										// 3 consecutive positive VAD frames (60ms) -> trigger interrupt!
+										triggerInterrupt()
+									}
+								} else {
+									consecutivePositive = 0
+								}
+								vadBuffer = vadBuffer[320:]
 							}
 						}
 					}()

@@ -14,7 +14,6 @@ import (
 // deepgramCallback implements msginterfaces.LiveMessageCallback
 type deepgramCallback struct {
 	onTranscript    func(transcript string, isFinal bool)
-	onSpeechStarted func()
 }
 
 func (c *deepgramCallback) Open(or *msginterfaces.OpenResponse) error { return nil }
@@ -33,12 +32,7 @@ func (c *deepgramCallback) Message(mr *msginterfaces.MessageResponse) error {
 	return nil
 }
 func (c *deepgramCallback) Metadata(md *msginterfaces.MetadataResponse) error { return nil }
-func (c *deepgramCallback) SpeechStarted(ssr *msginterfaces.SpeechStartedResponse) error {
-	if c.onSpeechStarted != nil {
-		c.onSpeechStarted()
-	}
-	return nil
-}
+func (c *deepgramCallback) SpeechStarted(ssr *msginterfaces.SpeechStartedResponse) error { return nil }
 func (c *deepgramCallback) UtteranceEnd(ur *msginterfaces.UtteranceEndResponse) error { return nil }
 func (c *deepgramCallback) Close(cr *msginterfaces.CloseResponse) error { return nil }
 func (c *deepgramCallback) Error(er *msginterfaces.ErrorResponse) error {
@@ -55,7 +49,7 @@ type DeepgramStreamSTT struct {
 }
 
 // NewDeepgramStreamSTT creates and starts a new Deepgram live transcription session.
-func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, isFinal bool), onSpeechStarted func()) (*DeepgramStreamSTT, error) {
+func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, isFinal bool)) (*DeepgramStreamSTT, error) {
 	os.Setenv("DEEPGRAM_API_KEY", apiKey)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,14 +58,11 @@ func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, is
 		Model:          "nova-3",
 		Language:       "en-US",
 		SmartFormat:    true,
-		Endpointing:    "500", // 500ms silence = end of sentence
-		InterimResults: true,  // Re-enabled: interim words confirm real user speech for barge-in
-		VadEvents:      true,  // Needed for SpeechStarted (used for logging, not barge-in)
+		InterimResults: true,  // Still needed for low-latency interim tokens
 	}
 
 	cb := &deepgramCallback{
 		onTranscript:    onTranscript,
-		onSpeechStarted: onSpeechStarted,
 	}
 
 	// Initialize the websocket client

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync/atomic"
+	"strings"
 	"time"
 
 	"github.com/Abhinav-Rao24/Zeplin/brain"
@@ -18,16 +18,40 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
-// ConnectLiveKit establishes a connection to a LiveKit room, hooks up the STT writer per participant, and publishes the agent's outbound voice track with Deepgram TTS streaming.
+// echoOverlapRatio computes the fraction of words in candidate that appear in reference.
+// A value > 0.40 indicates the STT transcript is likely an acoustic echo of the bot's own
+// TTS output that slipped through browser-level AEC, not genuine human speech.
+func echoOverlapRatio(candidate, reference string) float64 {
+	candWords := strings.Fields(strings.ToLower(candidate))
+	refWords := strings.Fields(strings.ToLower(reference))
+	if len(candWords) == 0 || len(refWords) == 0 {
+		return 0
+	}
+	refSet := make(map[string]bool, len(refWords))
+	for _, w := range refWords {
+		refSet[w] = true
+	}
+	matches := 0
+	for _, w := range candWords {
+		if refSet[w] {
+			matches++
+		}
+	}
+	return float64(matches) / float64(len(candWords))
+}
+
+// ConnectLiveKit establishes a connection to a LiveKit room, hooks up the STT writer per
+// participant, and publishes the agent's outbound voice track with Deepgram TTS streaming.
 func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance *brain.Brain, ttsEngine *tts.DeepgramStreamTTS) (*lksdk.Room, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// interruptChan signals the pacing loop to drain the TTS audio queue during a barge-in
+	// interruptChan signals the pacing loop to drain the TTS audio queue during a barge-in.
 	interruptChan := make(chan struct{}, 1)
 
-	// State machine variables to track agent speech resiliently
-	var isBrainActive atomic.Bool
-	var isPacingActive atomic.Bool
+	// Typed agent state machine. Replaces the old pair of isBrainActive / isPacingActive
+	// atomic.Bool flags with a single, explicitly-typed state for clearer reasoning.
+	//   StateListening → StateThinking → StateSpeaking → StateListening
+	sm := &AgentStateMachine{}
 
 	roomCB := &lksdk.RoomCallback{
 		ParticipantCallback: lksdk.ParticipantCallback{
@@ -37,56 +61,83 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					log.Printf("Audio track subscribed from %s", sessionID)
 
 					triggerInterrupt := func() {
-						// Only interrupt if the agent is actively thinking or speaking
-						isSpeaking := isBrainActive.Load() || isPacingActive.Load()
-						if !isSpeaking {
+						// Only interrupt if the agent is actively thinking or speaking.
+						// During StateListening there is no active generation to cancel.
+						if sm.Is(StateListening) {
 							return
 						}
 
-						log.Printf("[Barge-In] Interruption triggered! BrainActive: %t, PacingActive: %t", isBrainActive.Load(), isPacingActive.Load())
-						
-						// 1. Send Clear message to Deepgram TTS to stop generation
+						log.Printf("[Barge-In] Interruption triggered! Agent state: %s", sm.Get())
+
+						// 1. Send Clear to Deepgram TTS to stop current audio generation.
 						ttsEngine.Clear()
-						
-						// 2. Interrupt any active Brain generation
+
+						// 2. Cancel the active Groq streaming turn.
 						brainInstance.Interrupt(sessionID)
-						
-						// 3. Signal pacing loop to drain unplayed frames
+
+						// 3. Signal the pacing loop to drain any unplayed audio frames.
 						select {
 						case interruptChan <- struct{}{}:
 						default:
 						}
 					}
 
-					// Instantiate STT engine per participant
+					// Instantiate STT engine per participant.
 					sttEngine, err := stt.NewDeepgramStreamSTT(deepgramAPIKey, func(transcript string, isFinal bool) {
 						if transcript == "" {
 							return
 						}
 
+						// ── Software Echo Guard ────────────────────────────────────────────────
+						// When the agent is actively playing audio (StateSpeaking), an incoming
+						// STT transcript might be the bot's own voice looping back through the
+						// mic after bypassing the browser's AEC hardware filter.
+						//
+						// We compare the transcript's word set against the rolling buffer of
+						// recently spoken TTS tokens. If >40 % of the transcript's words appear
+						// in the buffer, it is almost certainly acoustic self-echo — drop it.
+						// If the overlap is low, a real human is speaking and we allow barge-in.
+						// ──────────────────────────────────────────────────────────────────────
+						if sm.Is(StateSpeaking) {
+							recentSpoken := ttsEngine.RecentSpokenText()
+							overlap := echoOverlapRatio(transcript, recentSpoken)
+							if overlap > 0.40 {
+								log.Printf("[Echo Guard] Dropped STT (%.0f%% overlap with recent TTS): %q", overlap*100, transcript)
+								return
+							}
+						}
+
 						if !isFinal {
-							// Interim transcript = confirmed user words arriving while agent speaks.
-							// This is the only reliable barge-in signal that proves a real human is
-							// speaking (not self-echo or ambient noise).
+							// Interim transcript that passed the echo guard = real human speech
+							// arriving while the agent is talking. Fire barge-in immediately.
 							triggerInterrupt()
 							return
 						}
 
-						// Final transcript: trigger interrupt (in case no interim arrived) then run brain.
+						// Final transcript: trigger interrupt (catches cases where no interim
+						// arrived) then hand off to the brain for a new response turn.
 						triggerInterrupt()
 						go func() {
-							isBrainActive.Store(true)
+							sm.Set(StateThinking)
 							log.Printf("[Brain] Turn started for session %s: %q", sessionID, transcript)
-							// Wait briefly for stray buffered tokens from the cancelled Groq HTTP stream
-							// to hit Speak() and be dropped (they're blocked by clearing=true).
-							// After this window, StartNewTurn() opens the gate for the new response.
+
+							// Allow 60 ms for stray buffered Groq HTTP tokens to hit the
+							// clearing gate in Speak() and be silently dropped before we
+							// call StartNewTurn() to re-open the gate for the new response.
 							time.Sleep(60 * time.Millisecond)
 							ttsEngine.StartNewTurn()
+
 							if err := brainInstance.ProcessTurn(context.Background(), sessionID, transcript); err != nil {
 								log.Printf("Error processing turn for session %s: %v", sessionID, err)
 							}
-							isBrainActive.Store(false)
-							log.Printf("[Brain] Turn ended. BrainActive=%v, PacingActive=%v", isBrainActive.Load(), isPacingActive.Load())
+
+							// If ProcessTurn finished without producing any audio (e.g., error
+							// path), the pacing loop never transitioned us to StateSpeaking, so
+							// reset manually to avoid getting stuck in StateThinking.
+							if sm.Is(StateThinking) {
+								sm.Set(StateListening)
+							}
+							log.Printf("[Brain] Turn ended. Agent state: %s", sm.Get())
 						}()
 					})
 					if err != nil {
@@ -94,42 +145,41 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						return
 					}
 
-					// Bypass local PCM decoding to avoid CGO requirements on Windows.
-					// Wrap the STT writer (Deepgram) with an OGG writer, and stream the Opus RTP packets.
+					// Wrap the STT writer (Deepgram) with an OGG writer and stream Opus RTP packets.
 					ogg, err := oggwriter.NewWith(sttEngine, 48000, 2)
 					if err != nil {
 						log.Printf("Error creating OGG writer: %v", err)
 						sttEngine.Close()
 						return
 					}
-					
+
 					log.Println("Successfully attached OGG writer to incoming track")
 
-					// Read RTP packets, run local WebRTC VAD, and write them to Deepgram as OGG
+					// RTP read loop: forwards audio to Deepgram STT and runs local WebRTC VAD.
 					go func() {
 						defer ogg.Close()
 						defer sttEngine.Close()
 
-						// Initialize local WebRTC VAD
+						// Initialize local WebRTC VAD in aggressive mode (3) to
+						// filter background noise and room tones.
 						vad, err := webrtcvad.New()
 						if err != nil {
 							log.Printf("Error creating local VAD: %v", err)
 							return
 						}
-						// Configure to aggressive mode (3) to strictly filter background noise
 						if err := vad.SetMode(3); err != nil {
 							log.Printf("Error setting VAD mode: %v", err)
 							return
 						}
 
-						// Initialize Opus Decoder (48kHz, 2 channels stereo)
+						// Initialize Opus decoder (48 kHz, stereo) for PCM conversion.
 						dec, err := opus.NewDecoderWithOutput(48000, 2)
 						if err != nil {
 							log.Printf("Error creating Opus decoder: %v", err)
 							return
 						}
 
-						pcmBuf := make([]int16, 11520) // max possible Opus frame size is 120ms
+						pcmBuf := make([]int16, 11520) // max Opus frame = 120 ms at 48 kHz stereo
 						var vadBuffer []byte
 						consecutivePositive := 0
 
@@ -139,43 +189,54 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								log.Printf("Track read error or closed: %v", err)
 								return
 							}
-							
-							// 1. Write to OGG container for Deepgram STT
+
+							// 1. Forward to Deepgram STT via OGG container.
 							if err := ogg.WriteRTP(rtpPacket); err != nil {
 								log.Printf("Error writing RTP to OGG container: %v", err)
 								return
 							}
 
-							// 2. Decode Opus payload to raw PCM
+							// 2. Decode Opus payload to raw signed-16 PCM.
 							if len(rtpPacket.Payload) == 0 {
 								continue
 							}
-
 							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcmBuf)
 							if err != nil {
 								continue
 							}
 
-							// 3. Downmix stereo -> mono, decimate 6:1 (48kHz stereo -> 8kHz mono)
+							// 3. Downmix stereo → mono and decimate 6:1 (48 kHz → 8 kHz).
 							for i := 0; i < sampleCount; i += 6 {
 								left := pcmBuf[2*i]
 								right := pcmBuf[2*i+1]
 								mono := int16((int32(left) + int32(right)) / 2)
-
-								// Convert to little-endian bytes and append to VAD buffer
 								vadBuffer = append(vadBuffer, byte(mono&0xff), byte(mono>>8))
 							}
 
-							// 4. Feed 320-byte (20ms) chunks to VAD Process(8000, frame)
+							// 4. Feed exact 320-byte (20 ms) chunks to WebRTC VAD.
 							for len(vadBuffer) >= 320 {
 								chunk := vadBuffer[:320]
+
+								// ── Dual-Layer Echo Mitigation ────────────────────────────────
+								// Normal mode: 3 consecutive positive frames (60 ms) → barge-in.
+								// StateSpeaking mode: 6 consecutive positive frames (120 ms).
+								//
+								// Raising the threshold during StateSpeaking requires the human
+								// to sustain louder, clearer speech to break through — acoustic
+								// self-echo from laptop speakers rarely sustains for 120 ms at
+								// the same amplitude as real speech in aggressive VAD mode 3.
+								// ─────────────────────────────────────────────────────────────
+								vadThreshold := 3
+								if sm.Is(StateSpeaking) {
+									vadThreshold = 6
+								}
+
 								activeVoice, err := vad.Process(8000, chunk)
 								if err != nil {
 									log.Printf("VAD process error: %v", err)
 								} else if activeVoice {
 									consecutivePositive++
-									if consecutivePositive >= 3 {
-										// 3 consecutive positive VAD frames (60ms) -> trigger interrupt!
+									if consecutivePositive >= vadThreshold {
 										triggerInterrupt()
 									}
 								} else {
@@ -200,10 +261,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 	room, err := lksdk.ConnectToRoom(url, lksdk.ConnectInfo{
 		APIKey:              apiKey,
 		APISecret:           apiSecret,
-		RoomName:            "voice-agent-room", // Designated virtual room
+		RoomName:            "voice-agent-room",
 		ParticipantIdentity: "zeplin-agent",
 	}, roomCB)
-
 	if err != nil {
 		cancel()
 		return nil, err
@@ -211,11 +271,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 	log.Printf("Connected to LiveKit room %s", room.Name())
 
-	// Initialize outbound audio track using Pion's pure-Go structures to bypass Windows CGO dependency.
+	// Initialize the outbound audio track (PCMU / μ-law at 8 kHz mono).
 	capability := webrtc.RTPCodecCapability{
-		MimeType:     webrtc.MimeTypePCMU,
-		ClockRate:    8000,
-		Channels:     1,
+		MimeType:  webrtc.MimeTypePCMU,
+		ClockRate: 8000,
+		Channels:  1,
 	}
 	outboundTrack, err := lksdk.NewLocalSampleTrack(capability)
 	if err != nil {
@@ -234,7 +294,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 	}
 	log.Println("Agent outbound voice track published successfully.")
 
-	// Register brain callback functions to stream Eino tokens chunk-by-chunk to the active TTS stream
+	// Wire brain callbacks to stream Groq tokens directly to the TTS pipeline.
 	brainInstance.OnToken = func(ctx context.Context, sessionID string, token string) {
 		if err := ttsEngine.Speak(token); err != nil {
 			log.Printf("Error sending text token to TTS: %v", err)
@@ -246,24 +306,24 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 		}
 	}
 
-	// Start outbound audio pacer loop to write ready-to-use Opus frames cleanly to the track.
+	// Outbound audio pacer loop: pulls PCMU frames from the TTS engine and writes
+	// them to the LiveKit track at the correct playback rate.
 	go func() {
 		drainQueue := func() {
-			draining := true
-			for draining {
+			for {
 				select {
 				case <-ttsEngine.AudioChan:
-					// Drop unplayed frame
+					// Drop unplayed frame.
 				default:
-					draining = false
+					sm.Set(StateListening)
+					log.Println("Pacing queue drained. Agent state: Listening")
+					return
 				}
 			}
-			isPacingActive.Store(false)
-			log.Println("Pacing queue drained successfully due to barge-in.")
 		}
 
 		for {
-			// Prioritize barge-in / cancellation check
+			// Prioritize any pending barge-in before pulling the next frame.
 			select {
 			case <-interruptChan:
 				drainQueue()
@@ -279,34 +339,33 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 				if !ok {
 					return
 				}
-				
-				isPacingActive.Store(true)
 
-				// mulaw (PCMU) = 1 byte per sample. 8000 Hz = 8000 bytes/sec.
+				// First frame from a new turn → agent is now speaking.
+				sm.Set(StateSpeaking)
+
+				// μ-law: 1 byte per sample at 8000 Hz.
 				durationMs := float64(len(frame)) / 8000.0 * 1000.0
 				duration := time.Duration(durationMs) * time.Millisecond
-				
-				err := outboundTrack.WriteSample(pionmedia.Sample{
+
+				if err := outboundTrack.WriteSample(pionmedia.Sample{
 					Data:     frame,
 					Duration: duration,
-				}, nil)
-				if err != nil {
+				}, nil); err != nil {
 					log.Printf("Error writing audio sample to outbound track: %v", err)
 				}
-				// Pace playing output stream to prevent choppy playback.
-				// Wait for duration, OR break instantly if interrupted
+
+				// Pace playback. Break instantly if a barge-in arrives mid-frame.
 				select {
 				case <-time.After(duration):
-					// Sleep finished
+					// Frame paced normally.
 				case <-interruptChan:
-					// Interrupted during pacing! Drain queue and drop.
 					drainQueue()
-					log.Println("Pacing queue drained successfully due to barge-in during sleep.")
+					log.Println("Pacing interrupted mid-frame. Queue drained.")
 				}
-				
-				// Reset pacing state if queue is currently empty
-				if len(ttsEngine.AudioChan) == 0 {
-					isPacingActive.Store(false)
+
+				// If the queue is now empty, the agent has finished speaking.
+				if len(ttsEngine.AudioChan) == 0 && sm.Is(StateSpeaking) {
+					sm.Set(StateListening)
 				}
 			}
 		}
@@ -314,5 +373,3 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 	return room, nil
 }
-
-

@@ -139,6 +139,31 @@ func (t *DeepgramStreamTTS) Flush() error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.conn.WriteMessage(websocket.TextMessage, msg)
+}
+
+// Clear sends a message to Deepgram to instantly wipe its TTS buffer
+func (t *DeepgramStreamTTS) Clear() error {
+	select {
+	case <-t.ctx.Done():
+		return fmt.Errorf("deepgram tts stream context cancelled")
+	default:
+	}
+
+	payload := map[string]string{
+		"type": "Clear",
+	}
+
+	msg, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.conn.WriteMessage(websocket.TextMessage, msg)
+}
+
 // Close terminates the WS connection
 func (t *DeepgramStreamTTS) Close() error {
 	t.cancel()

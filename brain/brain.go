@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 
 	"github.com/Abhinav-Rao24/Zeplin/memory"
 	"github.com/cloudwego/eino-ext/components/model/gemini"
@@ -15,12 +16,19 @@ import (
 	"google.golang.org/genai"
 )
 
+type turnState struct {
+	cancel context.CancelFunc
+}
+
 // Brain coordinates the conversational LLM brain via an Eino graph and MemoryStore.
 type Brain struct {
 	graph   compose.Runnable[map[string]any, *schema.Message]
 	store   memory.MemoryStore
 	OnToken func(ctx context.Context, sessionID string, token string)
 	OnFlush func(ctx context.Context, sessionID string)
+
+	mu          sync.Mutex
+	activeTurns map[string]*turnState
 }
 
 // NewBrain initializes a new Brain instance, building and compiling the type-safe Eino graph.
@@ -94,8 +102,9 @@ func NewBrain(ctx context.Context, apiKey string, store memory.MemoryStore) (*Br
 	}
 
 	return &Brain{
-		graph: runnable,
-		store: store,
+		graph:       runnable,
+		store:       store,
+		activeTurns: make(map[string]*turnState),
 	}, nil
 }
 
@@ -103,14 +112,32 @@ func NewBrain(ctx context.Context, apiKey string, store memory.MemoryStore) (*Br
 func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) error {
 	log.Printf("[Brain] Processing turn for session %s: %q", sessionID, text)
 
+	// Intercept any active generation
+	b.Interrupt(sessionID)
+
+	turnCtx, cancel := context.WithCancel(ctx)
+	tState := &turnState{cancel: cancel}
+	b.mu.Lock()
+	b.activeTurns[sessionID] = tState
+	b.mu.Unlock()
+
+	defer func() {
+		b.mu.Lock()
+		if b.activeTurns[sessionID] == tState {
+			delete(b.activeTurns, sessionID)
+		}
+		b.mu.Unlock()
+		cancel()
+	}()
+
 	// 1. Fetch historical transcripts from MemoryStore
-	history, err := b.store.Read(ctx, sessionID)
+	history, err := b.store.Read(turnCtx, sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to read memory for session %s: %w", sessionID, err)
 	}
 
 	// 2. Invoke the Eino graph using Stream method to capture real-time tokens
-	sr, err := b.graph.Stream(ctx, map[string]any{
+	sr, err := b.graph.Stream(turnCtx, map[string]any{
 		"history": history,
 		"input":   text,
 	})
@@ -161,4 +188,15 @@ func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) 
 
 	log.Printf("[Brain] Completed turn for session %s. Saved %d messages.", sessionID, 2)
 	return nil
+}
+
+// Interrupt immediately cancels the active generation turn for a session.
+func (b *Brain) Interrupt(sessionID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if tState, ok := b.activeTurns[sessionID]; ok {
+		log.Printf("[Brain] Interrupted active generation for session %s", sessionID)
+		tState.cancel()
+		delete(b.activeTurns, sessionID)
+	}
 }

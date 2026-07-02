@@ -19,6 +19,9 @@ import (
 func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance *brain.Brain, ttsEngine *tts.DeepgramStreamTTS) (*lksdk.Room, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// interruptChan signals the pacing loop to drain the TTS audio queue during a barge-in
+	interruptChan := make(chan struct{}, 1)
+
 	roomCB := &lksdk.RoomCallback{
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -28,6 +31,21 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 					// Instantiate STT engine per participant
 					sttEngine, err := stt.NewDeepgramStreamSTT(deepgramAPIKey, func(transcript string, isFinal bool) {
+						if transcript != "" {
+							// Barge-in detected: User is speaking
+							// 1. Send Clear message to Deepgram TTS to stop generation
+							ttsEngine.Clear()
+							
+							// 2. Interrupt any active Eino Brain generation
+							brainInstance.Interrupt(sessionID)
+							
+							// 3. Signal pacing loop to drain unplayed frames
+							select {
+							case interruptChan <- struct{}{}:
+							default:
+							}
+						}
+
 						if isFinal {
 							go func() {
 								if err := brainInstance.ProcessTurn(context.Background(), sessionID, transcript); err != nil {
@@ -136,6 +154,18 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 			select {
 			case <-ctx.Done():
 				return
+			case <-interruptChan:
+				// Barge-in triggered. Drain the pacing queue immediately.
+				draining := true
+				for draining {
+					select {
+					case <-ttsEngine.AudioChan:
+						// Drop unplayed frame
+					default:
+						draining = false
+					}
+				}
+				log.Println("Pacing queue drained successfully due to barge-in.")
 			case frame, ok := <-ttsEngine.AudioChan:
 				if !ok {
 					return

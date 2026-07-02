@@ -11,6 +11,7 @@ import (
 	"github.com/Abhinav-Rao24/Zeplin/config"
 	"github.com/Abhinav-Rao24/Zeplin/memory"
 	"github.com/Abhinav-Rao24/Zeplin/transport"
+	"github.com/Abhinav-Rao24/Zeplin/tts"
 )
 
 func main() {
@@ -32,8 +33,15 @@ func main() {
 	}
 	log.Println("Eino Brain and Gemini 2.5 Flash node initialized successfully.")
 
+	// Initialize Long-lived Deepgram TTS streaming engine
+	ttsEngine, err := tts.NewDeepgramStreamTTS(cfg.DeepgramAPIKey)
+	if err != nil {
+		log.Fatalf("Failed to initialize Deepgram TTS: %v", err)
+	}
+	defer ttsEngine.Close()
+
 	// Connect to LiveKit Room and hook up the STT Engine and Eino Brain
-	room, err := transport.ConnectLiveKit(cfg.LivekitURL, cfg.LivekitAPIKey, cfg.LivekitAPISecret, cfg.DeepgramAPIKey, brainEngine)
+	room, err := transport.ConnectLiveKit(cfg.LivekitURL, cfg.LivekitAPIKey, cfg.LivekitAPISecret, cfg.DeepgramAPIKey, brainEngine, ttsEngine)
 	if err != nil {
 		log.Fatalf("Failed to connect to LiveKit: %v", err)
 	}

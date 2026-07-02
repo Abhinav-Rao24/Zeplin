@@ -17,8 +17,10 @@ import (
 
 // Brain coordinates the conversational LLM brain via an Eino graph and MemoryStore.
 type Brain struct {
-	graph compose.Runnable[map[string]any, *schema.Message]
-	store memory.MemoryStore
+	graph   compose.Runnable[map[string]any, *schema.Message]
+	store   memory.MemoryStore
+	OnToken func(ctx context.Context, sessionID string, token string)
+	OnFlush func(ctx context.Context, sessionID string)
 }
 
 // NewBrain initializes a new Brain instance, building and compiling the type-safe Eino graph.
@@ -132,9 +134,15 @@ func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) 
 
 		// Print chunk content to stdout in real-time
 		fmt.Print(chunk.Content)
+		if b.OnToken != nil && chunk.Content != "" {
+			b.OnToken(ctx, sessionID, chunk.Content)
+		}
 		chunks = append(chunks, chunk)
 	}
 	fmt.Println() // Print newline when stream finishes
+	if b.OnFlush != nil {
+		b.OnFlush(ctx, sessionID)
+	}
 
 	// 3. Concatenate output chunks into a finalized message
 	assistantMsg, err := schema.ConcatMessages(chunks)

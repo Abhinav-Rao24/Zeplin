@@ -38,4 +38,44 @@ This document lists all major errors, issues, and bottlenecks faced during the d
 * **Issue**:
   When attempting to connect to the Deepgram TTS WebSocket stream with `Encoding: "opus"` set within `WSSpeakOptions` (which lacks a `Container` field), the WebSocket connection fails and drops instantly without triggering the `Error` callback. A quick test confirmed that switching `Encoding` to `"linear16"` successfully establishes the WebSocket connection. This confirms that Deepgram's WS Gateway strictly rejects `opus` unless accompanied by `container=none`. 
 * **Solution**:
-  Pending user guidance. We will likely need to write a custom `gorilla/websocket` client to append `container=none` to the dial string directly.
+  Bypassed the official Go SDK TTS implementation and built a custom WebSocket client using `github.com/gorilla/websocket`. We switched the encoding from Opus to `mulaw` at `8000Hz` (PCMU) to natively align with WebRTC's standard `webrtc.MimeTypePCMU` capabilities and avoid LiveKit server-side codec mismatch errors.
+
+---
+
+### 5. Premature Silence Cutoffs during STT Ingestion
+* **Issue**:
+  The conversational agent cut the user off prematurely when they paused mid-sentence to think. This was caused by the STT endpointing defaults which finalized speech turns too aggressively.
+* **Solution**:
+  We explicitly tuned the `LiveTranscriptionOptions` in `stt/deepgram.go` by specifying:
+  - `Endpointing: "1000"` (waits 1 second of silence to finalize a speech chunk)
+  - `UtteranceEndMs: "1000"` (requires 1 second of silence to trigger utterance end events)
+  - `InterimResults: true` (ensures real-time streaming results are delivered to the brain)
+  - `VadEvents: true` (enables real-time Voice Activity Detection events)
+
+---
+
+### 6. Sluggish Barge-In Cutoff Latency
+* **Issue**:
+  When a user interrupted the agent, the agent would keep speaking for 1-2 seconds. This lag resulted from:
+  1. Relying on transcript onset for interruption, which is slower than basic voice activity detection.
+  2. The pacing loop using a blocking `time.Sleep`, delaying the processing of the interruption signal.
+  3. Pseudo-random channel selection in the Go pacing `select` statement pulling extra frames from `AudioChan` even when an interrupt was pending.
+  4. Stray audio frames trickling in from Deepgram over the WebSocket right after the `Clear` signal was sent.
+* **Solution**:
+  We implemented an "Instant-Kill" control flow:
+  1. Triggered the interruption immediately on Deepgram's `SpeechStarted` callback.
+  2. Swapped out the pacing loop's `time.Sleep` for a `time.After` check in a select block alongside `interruptChan`.
+  3. Added a prioritized non-blocking check on `interruptChan` at the head of the pacing loop to instantly abort processing before pulling from `AudioChan`.
+  4. Used an atomic boolean flag (`clearing`) in `tts/deepgram.go` to block and discard any post-clear trickling packets until the next Speak call.
+
+---
+
+### 7. Ghost Interruptions from Ambient Noise (State Machine Resiliency)
+* **Issue**:
+  Enabling real-time voice activity detection (VAD) via `SpeechStarted` events and early interim results made barge-in highly responsive, but triggered false-positive "ghost interruptions" from room ambient noise. When the agent was completely silent/listening, this ambient noise would still trigger context cancellation, disrupting Eino/Gemini turn processing when the user was about to speak.
+* **Solution**:
+  We implemented a thread-safe, resilient State Machine using atomic flags:
+  - `isBrainActive` (tracks if Gemini is actively generating a turn, set to `true` at the start of `ProcessTurn` and `false` on completion).
+  - `isPacingActive` (tracks if the LiveKit pacing loop is active, set to `true` when pulling audio frames from the buffer and `false` when the buffer goes empty and playback completes).
+  - **Interruption Guard**: The barge-in interruption logic inside `ConnectLiveKit` was wrapped in a conditional check: it only fires if `isBrainActive || isPacingActive` is `true`. If the agent is silent/listening, all incoming `SpeechStarted` callbacks or interim transcripts are completely ignored for interruption.
+

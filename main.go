@@ -25,13 +25,13 @@ func main() {
 	memStore := memory.NewInMemoryStore()
 	log.Println("Session Memory Store initialized.")
 
-	// Initialize Eino brain layer
+	// Initialize Groq brain layer
 	ctx := context.Background()
-	brainEngine, err := brain.NewBrain(ctx, cfg.GeminiAPIKey, memStore)
+	brainEngine, err := brain.NewBrain(ctx, cfg.GroqAPIKey, memStore)
 	if err != nil {
-		log.Fatalf("Failed to initialize Eino brain: %v", err)
+		log.Fatalf("Failed to initialize Groq brain: %v", err)
 	}
-	log.Println("Eino Brain and Gemini 2.5 Flash node initialized successfully.")
+	log.Println("Groq Brain and Llama 3.1 node initialized successfully.")
 
 	// Initialize Long-lived Deepgram TTS streaming engine
 	ttsEngine, err := tts.NewDeepgramStreamTTS(cfg.DeepgramAPIKey)

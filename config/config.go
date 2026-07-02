@@ -10,12 +10,12 @@ import (
 
 // Config holds the validated environment variables
 type Config struct {
-	GeminiAPIKey     string
 	LivekitURL       string
 	LivekitAPIKey    string
 	LivekitAPISecret string
 	TTSAPIKey        string
 	DeepgramAPIKey   string
+	GroqAPIKey       string
 }
 
 // Load verifies and loads required configuration variables from a .env file and environment
@@ -26,12 +26,12 @@ func Load() *Config {
 	}
 
 	requiredKeys := []string{
-		"GEMINI_API_KEY",
 		"LIVEKIT_URL",
 		"LIVEKIT_API_KEY",
 		"LIVEKIT_API_SECRET",
 		"TTS_API_KEY",
 		"DEEPGRAM_API_KEY",
+		"GROQ_API_KEY",
 	}
 
 	var missingKeys []string
@@ -48,11 +48,11 @@ func Load() *Config {
 	}
 
 	return &Config{
-		GeminiAPIKey:     strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		LivekitURL:       strings.TrimSpace(os.Getenv("LIVEKIT_URL")),
 		LivekitAPIKey:    strings.TrimSpace(os.Getenv("LIVEKIT_API_KEY")),
 		LivekitAPISecret: strings.TrimSpace(os.Getenv("LIVEKIT_API_SECRET")),
 		TTSAPIKey:        strings.TrimSpace(os.Getenv("TTS_API_KEY")),
 		DeepgramAPIKey:   strings.TrimSpace(os.Getenv("DEEPGRAM_API_KEY")),
+		GroqAPIKey:       strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
 	}
 }

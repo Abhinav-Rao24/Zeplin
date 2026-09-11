@@ -359,7 +359,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 			case <-interruptChan:
 				drainQueue()
 				continue
-			case frame, ok := <-ttsEngine.AudioChan:
+			case chunk, ok := <-ttsEngine.AudioChan:
 				if !ok {
 					if sm.Is(StateSpeaking) {
 						transitionToListening(sm, telemetryRegistry)
@@ -367,72 +367,85 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					return
 				}
 
-				// First frame of a turn transitions the agent to StateSpeaking.
-				if !sm.Is(StateSpeaking) {
-					sm.Set(StateSpeaking)
-				}
+				// Deepgram delivers variable-sized audio blocks (often 320 bytes = 40ms).
+				// Standard WebRTC frame size for 8kHz mono PCMU is exactly 160 bytes (20ms).
+				// We slice chunks into 160-byte frames so every outbound packet is exact 20.00ms.
+				const frameSize = 160
 
-				// μ-law: 1 byte per sample at 8000 Hz.
-				durationMs := float64(len(frame)) / 8000.0 * 1000.0
-				duration := time.Duration(durationMs) * time.Millisecond
+				for offset := 0; offset < len(chunk); offset += frameSize {
+					end := offset + frameSize
+					if end > len(chunk) {
+						end = len(chunk)
+					}
+					frame := chunk[offset:end]
 
-				if err := outboundTrack.WriteSample(pionmedia.Sample{
-					Data:     frame,
-					Duration: duration,
-				}, nil); err != nil {
-					log.Printf("Error writing audio sample to outbound track: %v", err)
-				}
-
-				activeTelemetry := telemetryRegistry.GetActiveTelemetry()
-				if activeTelemetry != nil {
-					activeTelemetry.RecordOutboundPush()
-				}
-
-				now := time.Now()
-				if nextFrameTime.IsZero() || now.After(nextFrameTime.Add(duration)) {
-					nextFrameTime = now.Add(duration)
-				} else {
-					nextFrameTime = nextFrameTime.Add(duration)
-				}
-
-				// If this was the last frame in the queue, transition back to listening
-				// immediately to reduce latency for the user's response.
-				isLastFrame := len(ttsEngine.AudioChan) == 0
-				if isLastFrame && sm.Is(StateSpeaking) {
-					transitionToListening(sm, telemetryRegistry)
-					nextFrameTime = time.Time{}
-				}
-
-				// High-precision hybrid spin-yield pacing:
-				// 1. Coarse sleep for (remaining - 2ms) using a timer when remaining > 3ms to release CPU.
-				// 2. Fine spin-yield with runtime.Gosched() for the final <=3ms to eliminate OS scheduler jitter (<2ms).
-				for {
-					remaining := time.Until(nextFrameTime)
-					if remaining <= 0 {
-						break
+					// First frame of a turn transitions the agent to StateSpeaking.
+					if !sm.Is(StateSpeaking) {
+						sm.Set(StateSpeaking)
 					}
 
-					if remaining > 3*time.Millisecond {
-						coarseTimer := time.NewTimer(remaining - 2*time.Millisecond)
-						select {
-						case <-ctx.Done():
-							coarseTimer.Stop()
-							return
-						case <-interruptChan:
-							coarseTimer.Stop()
-							drainQueue()
-							goto nextPacingCycle
-						case <-coarseTimer.C:
-						}
+					// μ-law: 1 byte per sample at 8000 Hz.
+					durationMs := float64(len(frame)) / 8000.0 * 1000.0
+					duration := time.Duration(durationMs) * time.Millisecond
+
+					if err := outboundTrack.WriteSample(pionmedia.Sample{
+						Data:     frame,
+						Duration: duration,
+					}, nil); err != nil {
+						log.Printf("Error writing audio sample to outbound track: %v", err)
+					}
+
+					activeTelemetry := telemetryRegistry.GetActiveTelemetry()
+					if activeTelemetry != nil {
+						activeTelemetry.RecordOutboundPush()
+					}
+
+					now := time.Now()
+					if nextFrameTime.IsZero() || now.After(nextFrameTime.Add(duration)) {
+						nextFrameTime = now.Add(duration)
 					} else {
-						select {
-						case <-ctx.Done():
-							return
-						case <-interruptChan:
-							drainQueue()
-							goto nextPacingCycle
-						default:
-							runtime.Gosched()
+						nextFrameTime = nextFrameTime.Add(duration)
+					}
+
+					// If this was the last frame in the queue, transition back to listening
+					// immediately to reduce latency for the user's response.
+					isLastFrame := (offset+frameSize >= len(chunk)) && len(ttsEngine.AudioChan) == 0
+					if isLastFrame && sm.Is(StateSpeaking) {
+						transitionToListening(sm, telemetryRegistry)
+						nextFrameTime = time.Time{}
+					}
+
+					// High-precision hybrid spin-yield pacing:
+					// 1. Coarse sleep for (remaining - 2ms) using a timer when remaining > 3ms to release CPU.
+					// 2. Fine spin-yield with runtime.Gosched() for the final <=3ms to eliminate OS scheduler jitter (<2ms).
+					for {
+						remaining := time.Until(nextFrameTime)
+						if remaining <= 0 {
+							break
+						}
+
+						if remaining > 3*time.Millisecond {
+							coarseTimer := time.NewTimer(remaining - 2*time.Millisecond)
+							select {
+							case <-ctx.Done():
+								coarseTimer.Stop()
+								return
+							case <-interruptChan:
+								coarseTimer.Stop()
+								drainQueue()
+								goto nextPacingCycle
+							case <-coarseTimer.C:
+							}
+						} else {
+							select {
+							case <-ctx.Done():
+								return
+							case <-interruptChan:
+								drainQueue()
+								goto nextPacingCycle
+							default:
+								runtime.Gosched()
+							}
 						}
 					}
 				}

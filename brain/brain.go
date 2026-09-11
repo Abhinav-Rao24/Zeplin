@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"sync"
 
 	"github.com/Abhinav-Rao24/Zeplin/memory"
@@ -90,8 +91,13 @@ func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) 
 	messages = append(messages, history...)
 	messages = append(messages, userMsg)
 
+	modelName := os.Getenv("GROQ_MODEL")
+	if modelName == "" {
+		modelName = "openai/gpt-oss-20b"
+	}
+
 	req := openai.ChatCompletionRequest{
-		Model:    "llama-3.1-8b-instant",
+		Model:    modelName,
 		Messages: messages,
 		Stream:   true,
 	}

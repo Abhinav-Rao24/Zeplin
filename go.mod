@@ -3,10 +3,13 @@ module github.com/Abhinav-Rao24/Zeplin
 go 1.26
 
 require (
+	github.com/aflyingHusky/go-webrtcvad v0.0.0-20250109163356-66a4d20f2f97
 	github.com/deepgram/deepgram-go-sdk/v3 v3.7.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/joho/godotenv v1.5.1
+	github.com/livekit/protocol v1.48.1-0.20260624204523-bd5703442db6
 	github.com/livekit/server-sdk-go/v2 v2.16.7
+	github.com/pion/opus v0.1.0
 	github.com/pion/webrtc/v4 v4.2.16
 	github.com/sashabaranov/go-openai v1.41.2
 )
@@ -16,7 +19,6 @@ require (
 	buf.build/go/protovalidate v1.2.0 // indirect
 	buf.build/go/protoyaml v0.7.0 // indirect
 	cel.dev/expr v0.25.2 // indirect
-	github.com/aflyingHusky/go-webrtcvad v0.0.0-20250109163356-66a4d20f2f97 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -41,7 +43,6 @@ require (
 	github.com/lithammer/shortuuid/v4 v4.2.0 // indirect
 	github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731 // indirect
 	github.com/livekit/mediatransportutil v0.0.0-20260605212259-862d4a7bcb1e // indirect
-	github.com/livekit/protocol v1.48.1-0.20260624204523-bd5703442db6 // indirect
 	github.com/livekit/psrpc v0.7.2 // indirect
 	github.com/magefile/mage v1.17.2 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -56,7 +57,6 @@ require (
 	github.com/pion/interceptor v0.1.45 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
-	github.com/pion/opus v0.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/rtp v1.10.2 // indirect

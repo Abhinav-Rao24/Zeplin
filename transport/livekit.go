@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -52,6 +54,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 	// atomic.Bool flags with a single, explicitly-typed state for clearer reasoning.
 	//   StateListening → StateThinking → StateSpeaking → StateListening
 	sm := &AgentStateMachine{}
+
+	telemetryRegistry := NewTelemetryRegistry()
+	ttsEngine.OnAudioFrame = func() {
+		telemetryRegistry.RecordFirstAudioFrame()
+	}
 
 	roomCB := &lksdk.RoomCallback{
 		ParticipantCallback: lksdk.ParticipantCallback{
@@ -108,9 +115,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						}
 
 						if !isFinal {
-							// Interim transcript that passed the echo guard = real human speech
-							// arriving while the agent is talking. Fire barge-in immediately.
-							triggerInterrupt()
+							// Interim transcripts are unreliable noise sources — do NOT trigger
+							// a hard barge-in here. The VAD layer handles real-time interruption
+							// with a sustained-voice threshold to prevent false positives.
 							return
 						}
 
@@ -118,6 +125,8 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						// arrived) then hand off to the brain for a new response turn.
 						triggerInterrupt()
 						go func() {
+							telemetryRegistry.SetActiveSession(sessionID)
+							telemetryRegistry.Get(sessionID).StartThinking()
 							sm.Set(StateThinking)
 							log.Printf("[Brain] Turn started for session %s: %q", sessionID, transcript)
 
@@ -218,17 +227,15 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								chunk := vadBuffer[:320]
 
 								// ── Dual-Layer Echo Mitigation ────────────────────────────────
-								// Normal mode: 3 consecutive positive frames (60 ms) → barge-in.
-								// StateSpeaking mode: 6 consecutive positive frames (120 ms).
-								//
-								// Raising the threshold during StateSpeaking requires the human
-								// to sustain louder, clearer speech to break through — acoustic
-								// self-echo from laptop speakers rarely sustains for 120 ms at
-								// the same amplitude as real speech in aggressive VAD mode 3.
-								// ─────────────────────────────────────────────────────────────
+								// Listening: 3 consecutive positive frames (60 ms) → barge-in.
+								// Speaking:  10 consecutive positive frames (200 ms) → barge-in.
+								// The higher speaking threshold requires the human to sustain
+								// clear speech for 200 ms before breaking through — laptop speaker
+								// echo and short noise bursts rarely sustain that long at the same
+								// energy level as real speech in aggressive VAD mode 3.
 								vadThreshold := 3
 								if sm.Is(StateSpeaking) {
-									vadThreshold = 6
+									vadThreshold = 10
 								}
 
 								activeVoice, err := vad.Process(8000, chunk)
@@ -258,10 +265,15 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 		},
 	}
 
+	roomName := strings.TrimSpace(os.Getenv("LIVEKIT_ROOM_NAME"))
+	if roomName == "" {
+		roomName = "voice-agent-room"
+	}
+
 	room, err := lksdk.ConnectToRoom(url, lksdk.ConnectInfo{
 		APIKey:              apiKey,
 		APISecret:           apiSecret,
-		RoomName:            "voice-agent-room",
+		RoomName:            roomName,
 		ParticipantIdentity: "zeplin-agent",
 	}, roomCB)
 	if err != nil {
@@ -296,6 +308,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 	// Wire brain callbacks to stream Groq tokens directly to the TTS pipeline.
 	brainInstance.OnToken = func(ctx context.Context, sessionID string, token string) {
+		telemetryRegistry.Get(sessionID).RecordFirstToken()
 		if err := ttsEngine.Speak(token); err != nil {
 			log.Printf("Error sending text token to TTS: %v", err)
 		}
@@ -307,15 +320,24 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 	}
 
 	// Outbound audio pacer loop: pulls PCMU frames from the TTS engine and writes
-	// them to the LiveKit track at the correct playback rate.
+	// them to the LiveKit track at exactly the right 20ms cadence.
+	//
+	// Design: We block on reading a frame from ttsEngine.AudioChan FIRST. This
+	// guarantees that no frames are ever skipped or dropped due to microsecond
+	// jitter in the network/generator. Once a frame is received, we write it
+	// to the WebRTC track, record telemetry, and then pace outbound delivery using
+	// a high-precision hybrid spin-yield loop locked to exact 20.00ms intervals.
 	go func() {
+		var nextFrameTime time.Time
+
 		drainQueue := func() {
+			nextFrameTime = time.Time{}
 			for {
 				select {
 				case <-ttsEngine.AudioChan:
 					// Drop unplayed frame.
 				default:
-					sm.Set(StateListening)
+					transitionToListening(sm, telemetryRegistry)
 					log.Println("Pacing queue drained. Agent state: Listening")
 					return
 				}
@@ -323,10 +345,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 		}
 
 		for {
-			// Prioritize any pending barge-in before pulling the next frame.
+			// Prioritize any pending barge-in before blocking on the next frame.
 			select {
 			case <-interruptChan:
 				drainQueue()
+				continue
 			default:
 			}
 
@@ -335,13 +358,19 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 				return
 			case <-interruptChan:
 				drainQueue()
+				continue
 			case frame, ok := <-ttsEngine.AudioChan:
 				if !ok {
+					if sm.Is(StateSpeaking) {
+						transitionToListening(sm, telemetryRegistry)
+					}
 					return
 				}
 
-				// First frame from a new turn → agent is now speaking.
-				sm.Set(StateSpeaking)
+				// First frame of a turn transitions the agent to StateSpeaking.
+				if !sm.Is(StateSpeaking) {
+					sm.Set(StateSpeaking)
+				}
 
 				// μ-law: 1 byte per sample at 8000 Hz.
 				durationMs := float64(len(frame)) / 8000.0 * 1000.0
@@ -354,22 +383,75 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					log.Printf("Error writing audio sample to outbound track: %v", err)
 				}
 
-				// Pace playback. Break instantly if a barge-in arrives mid-frame.
-				select {
-				case <-time.After(duration):
-					// Frame paced normally.
-				case <-interruptChan:
-					drainQueue()
-					log.Println("Pacing interrupted mid-frame. Queue drained.")
+				activeTelemetry := telemetryRegistry.GetActiveTelemetry()
+				if activeTelemetry != nil {
+					activeTelemetry.RecordOutboundPush()
 				}
 
-				// If the queue is now empty, the agent has finished speaking.
-				if len(ttsEngine.AudioChan) == 0 && sm.Is(StateSpeaking) {
-					sm.Set(StateListening)
+				now := time.Now()
+				if nextFrameTime.IsZero() || now.After(nextFrameTime.Add(duration)) {
+					nextFrameTime = now.Add(duration)
+				} else {
+					nextFrameTime = nextFrameTime.Add(duration)
 				}
+
+				// If this was the last frame in the queue, transition back to listening
+				// immediately to reduce latency for the user's response.
+				isLastFrame := len(ttsEngine.AudioChan) == 0
+				if isLastFrame && sm.Is(StateSpeaking) {
+					transitionToListening(sm, telemetryRegistry)
+					nextFrameTime = time.Time{}
+				}
+
+				// High-precision hybrid spin-yield pacing:
+				// 1. Coarse sleep for (remaining - 2ms) using a timer when remaining > 3ms to release CPU.
+				// 2. Fine spin-yield with runtime.Gosched() for the final <=3ms to eliminate OS scheduler jitter (<2ms).
+				for {
+					remaining := time.Until(nextFrameTime)
+					if remaining <= 0 {
+						break
+					}
+
+					if remaining > 3*time.Millisecond {
+						coarseTimer := time.NewTimer(remaining - 2*time.Millisecond)
+						select {
+						case <-ctx.Done():
+							coarseTimer.Stop()
+							return
+						case <-interruptChan:
+							coarseTimer.Stop()
+							drainQueue()
+							goto nextPacingCycle
+						case <-coarseTimer.C:
+						}
+					} else {
+						select {
+						case <-ctx.Done():
+							return
+						case <-interruptChan:
+							drainQueue()
+							goto nextPacingCycle
+						default:
+							runtime.Gosched()
+						}
+					}
+				}
+			nextPacingCycle:
 			}
 		}
 	}()
 
 	return room, nil
+}
+
+func transitionToListening(sm *AgentStateMachine, registry *TelemetryRegistry) {
+	if sm.Is(StateSpeaking) {
+		sm.Set(StateListening)
+		activeSession := registry.GetActiveSession()
+		if activeSession != "" {
+			registry.Get(activeSession).CompileAndReport()
+		}
+	} else {
+		sm.Set(StateListening)
+	}
 }

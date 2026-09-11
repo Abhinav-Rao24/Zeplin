@@ -65,6 +65,7 @@ type DeepgramStreamTTS struct {
 	wsURL        string
 	apiKey       string
 	recentText   recentSpeechBuffer
+	OnAudioFrame func()
 }
 
 // NewDeepgramStreamTTS instantiates a Gorilla WebSocket client to Deepgram TTS.
@@ -208,6 +209,9 @@ func (t *DeepgramStreamTTS) runOneShotRead(audioChan chan<- []byte) error {
 		case websocket.BinaryMessage:
 			if t.clearing.Load() {
 				continue // Drop straggling audio frames from the previous interrupted generation.
+			}
+			if t.OnAudioFrame != nil {
+				t.OnAudioFrame()
 			}
 			select {
 			case audioChan <- message:

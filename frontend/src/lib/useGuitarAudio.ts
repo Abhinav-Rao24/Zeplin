@@ -89,6 +89,28 @@ export function useGuitarAudio() {
           // Publish mic audio to room
           const audioTrack = micStream.getAudioTracks()[0];
           room.localParticipant.publishTrack(audioTrack, { name: 'student-audio' });
+
+          // Send student_connected handshake so Zeplin greets the student immediately with voice
+          setTimeout(() => {
+            try {
+              room.localParticipant.publishData(
+                new TextEncoder().encode(JSON.stringify({ event: 'student_connected' })),
+                { reliable: true }
+              );
+            } catch (e) {
+              console.error('Handshake publish error:', e);
+            }
+          }, 300);
+        });
+
+        // CRITICAL: Attach agent voice track to DOM so student hears Zeplin speaking
+        room.on(LiveKit.RoomEvent.TrackSubscribed, (track: LiveKit.RemoteTrack) => {
+          if (track.kind === LiveKit.Track.Kind.Audio) {
+            const el = track.attach();
+            el.autoplay = true;
+            document.body.appendChild(el);
+            console.log('[LiveKit] Agent audio track attached to DOM and active.');
+          }
         });
 
         room.on(LiveKit.RoomEvent.Disconnected, () => {
@@ -107,7 +129,14 @@ export function useGuitarAudio() {
                 streak: msg.current_streak ?? prev.streak,
                 feedbackText: msg.feedback_text || prev.feedbackText,
                 stringStatus: msg.string_status || prev.stringStatus,
+                agentState: msg.feedback_text ? 'speaking' : 'listening',
               }));
+              // Reset speaking state back to listening after short delay
+              if (msg.feedback_text) {
+                setTimeout(() => {
+                  setState((prev) => ({ ...prev, agentState: 'listening' }));
+                }, 4000);
+              }
             }
           } catch (err) {
             console.error('DataChannel parse error:', err);
@@ -206,6 +235,20 @@ export function useGuitarAudio() {
     }
   }, []);
 
+  const changeTargetChord = useCallback((chordId: string) => {
+    setState((prev) => ({ ...prev, targetChord: chordId, streak: 0 }));
+    if (roomRef.current && roomRef.current.state === LiveKit.ConnectionState.Connected) {
+      try {
+        roomRef.current.localParticipant.publishData(
+          new TextEncoder().encode(JSON.stringify({ event: 'set_target_chord', chord: chordId })),
+          { reliable: true }
+        );
+      } catch (e) {
+        console.error('Failed to set target chord:', e);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       endSession();
@@ -216,6 +259,7 @@ export function useGuitarAudio() {
     state,
     startSession,
     endSession,
+    changeTargetChord,
     playChordAudio,
     setState,
   };

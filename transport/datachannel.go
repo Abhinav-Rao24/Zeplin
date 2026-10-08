@@ -38,6 +38,19 @@ func AttachDataChannelHandler(roomCB *lksdk.RoomCallback, orch *lessons.Orchestr
 		}
 
 		switch envelope.Event {
+		case "student_connected", "start_session":
+			log.Printf("[DataChannel] Student connected handshake from %s — triggering verbal greeting", senderID)
+			orch.StartSession(senderID)
+
+		case "set_target_chord":
+			var payload struct {
+				Chord string `json:"chord"`
+			}
+			if err := json.Unmarshal(data, &payload); err == nil && payload.Chord != "" {
+				log.Printf("[DataChannel] Setting target chord to %s for %s", payload.Chord, senderID)
+				orch.SetTargetChord(senderID, payload.Chord)
+			}
+
 		case "chord_detected":
 			var evt dsp.ChordEvent
 			if err := json.Unmarshal(data, &evt); err != nil {

@@ -111,13 +111,30 @@ func (o *Orchestrator) StartSession(sessionID string) {
 
 	var greeting string
 	if sess.CurriculumIdx > 0 {
-		greeting = fmt.Sprintf("Welcome back. We are on step %d, practicing %s. Give me a strum.", sess.CurriculumIdx+1, display)
+		greeting = fmt.Sprintf("Welcome back. We are practicing %s. Give me a strum when you're ready.", display)
 	} else {
-		greeting = fmt.Sprintf("Welcome to Zeplin. Let's start with %s. Strum when ready.", display)
+		greeting = fmt.Sprintf("Hey there! Welcome to Zeplin. I'm your guitar co-pilot. Let's start with %s. Strum when you're ready.", display)
 	}
 
 	o.speak(greeting)
 	o.publishState(sess, dsp.ChordEvent{}, greeting)
+}
+
+// SetTargetChord switches the active target chord and provides spoken instruction.
+func (o *Orchestrator) SetTargetChord(sessionID, chordName string) {
+	sess := o.GetOrCreateSession(sessionID)
+	def := ChordByName(chordName)
+	if def == nil {
+		return
+	}
+	sess.mu.Lock()
+	sess.CurrentStep.TargetChord = chordName
+	sess.SuccessStreak = 0
+	sess.mu.Unlock()
+
+	msg := fmt.Sprintf("Switching to %s. Strum all strings cleanly.", def.DisplayName)
+	o.speak(msg)
+	o.publishState(sess, dsp.ChordEvent{}, msg)
 }
 
 // SetSpeechActive sets the VAD gate for chord suppression.

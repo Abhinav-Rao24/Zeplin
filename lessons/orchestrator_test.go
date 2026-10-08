@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Abhinav-Rao24/Zeplin/dsp"
+	"github.com/Abhinav-Rao24/Zeplin/memory"
 )
 
 func TestChordLibrary(t *testing.T) {
@@ -149,5 +150,86 @@ func TestSpeechGatingSuppressesChord(t *testing.T) {
 	}
 	if len(published) != 1 {
 		t.Errorf("Expected 1 published state update, got %d", len(published))
+	}
+}
+
+func TestStartSession(t *testing.T) {
+	var published []dsp.UIStateUpdate
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {
+		published = append(published, u)
+	})
+
+	orch.StartSession("student-2")
+
+	if len(published) != 1 {
+		t.Fatalf("Expected 1 UI state update from StartSession, got %d", len(published))
+	}
+
+	u := published[0]
+	if u.TargetChord != "E_Minor" {
+		t.Errorf("Expected initial target E_Minor, got %s", u.TargetChord)
+	}
+	// E minor has all 6 strings played (no muted strings)
+	for i, s := range u.StringStatus {
+		if s != "ok" {
+			t.Errorf("Expected string %d to be ok for E_Minor, got %s", i, s)
+		}
+	}
+}
+
+type mockStore struct {
+	savedStep   int
+	savedStreak int
+	mistakes    []string
+	savedRecord bool
+}
+
+func (m *mockStore) SaveCurriculumProgress(studentID string, stepID, streak int, completedSteps []int) error {
+	m.savedStep = stepID
+	m.savedStreak = streak
+	return nil
+}
+
+func (m *mockStore) GetCurriculumProgress(studentID string) (int, int, []int, error) {
+	return 2, 1, []int{1}, nil // step 2 = A_Minor
+}
+
+func (m *mockStore) RecordMistake(studentID, chordName, mistakeType, details string) error {
+	m.mistakes = append(m.mistakes, chordName+":"+mistakeType)
+	return nil
+}
+
+func (m *mockStore) SaveSession(rec memory.SessionRecord) error {
+	m.savedRecord = true
+	return nil
+}
+
+func TestOrchestratorWithSQLiteStore(t *testing.T) {
+	store := &mockStore{}
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {})
+	orch.SetStore(store)
+
+	// Resuming session should restore step 2 (A_Minor)
+	sess := orch.GetOrCreateSession("student-3")
+	if sess.CurrentStep.TargetChord != "A_Minor" {
+		t.Errorf("Expected restored target A_Minor, got %s", sess.CurrentStep.TargetChord)
+	}
+	if sess.SuccessStreak != 1 {
+		t.Errorf("Expected restored streak 1, got %d", sess.SuccessStreak)
+	}
+
+	// Mistake records into store
+	orch.HandleChordEvent("student-3", dsp.ChordEvent{
+		DetectedChord: "G_Major", // Wrong chord
+		Confidence:    0.9,
+	})
+	if len(store.mistakes) != 1 {
+		t.Errorf("Expected 1 mistake recorded in store, got %d", len(store.mistakes))
+	}
+
+	// Close session saves record
+	orch.CloseSession("student-3")
+	if !store.savedRecord {
+		t.Errorf("Expected session record to be saved on CloseSession")
 	}
 }

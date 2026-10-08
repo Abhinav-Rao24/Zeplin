@@ -68,6 +68,7 @@ func main() {
 		LivekitAPIKey:    cfg.LivekitAPIKey,
 		LivekitAPISecret: cfg.LivekitAPISecret,
 		DefaultRoom:      "voice-agent-room",
+		Store:            sqlStore,
 	}, subFS)
 	log.Printf("Client available at http://localhost:%s", cfg.HTTPPort)
 

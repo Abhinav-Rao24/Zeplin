@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Abhinav-Rao24/Zeplin/memory"
 	"github.com/livekit/protocol/auth"
 )
 
@@ -18,10 +19,11 @@ type HTTPServerConfig struct {
 	LivekitAPIKey    string
 	LivekitAPISecret string
 	DefaultRoom      string
+	Store            *memory.SQLiteStore
 }
 
 // ServeClient starts the embedded HTTP server, serving static frontend assets
-// and providing the /api/token endpoint for automatic LiveKit JWT generation.
+// and providing the /api/token and /api/summary endpoints.
 //
 // Access the client at http://localhost:<port>/
 func ServeClient(cfg HTTPServerConfig, clientFS fs.FS) {
@@ -33,6 +35,13 @@ func ServeClient(cfg HTTPServerConfig, clientFS fs.FS) {
 
 	// 2. Token minting endpoint (/api/token)
 	mux.HandleFunc("/api/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		identity := r.URL.Query().Get("identity")
 		if identity == "" {
 			identity = "student-1"
@@ -69,8 +78,32 @@ func ServeClient(cfg HTTPServerConfig, clientFS fs.FS) {
 		})
 	})
 
+	// 3. Student practice summary & analytics endpoint (/api/summary)
+	if cfg.Store != nil {
+		mux.HandleFunc("/api/summary", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			studentID := r.URL.Query().Get("student")
+			if studentID == "" {
+				studentID = "student-1"
+			}
+			summary, err := cfg.Store.GetStudentSummary(studentID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to get student summary: %v", err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(summary)
+		})
+	}
+
 	addr := ":" + cfg.Port
-	log.Printf("[HTTP] Guitar co-pilot client and token API available at http://localhost%s", addr)
+	log.Printf("[HTTP] Guitar co-pilot client and API available at http://localhost%s", addr)
 
 	go func() {
 		if err := http.ListenAndServe(addr, mux); err != nil {

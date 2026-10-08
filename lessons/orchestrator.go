@@ -98,6 +98,28 @@ func (o *Orchestrator) GetOrCreateSession(sessionID string) *LessonSession {
 	return sess
 }
 
+// StartSession initializes the lesson for a participant, publishes initial state,
+// and gives the introductory verbal prompt.
+func (o *Orchestrator) StartSession(sessionID string) {
+	sess := o.GetOrCreateSession(sessionID)
+	target := sess.ActiveTarget()
+	targetDef := ChordByName(target)
+	display := target
+	if targetDef != nil {
+		display = targetDef.DisplayName
+	}
+
+	var greeting string
+	if sess.CurriculumIdx > 0 {
+		greeting = fmt.Sprintf("Welcome back. We are on step %d, practicing %s. Give me a strum.", sess.CurriculumIdx+1, display)
+	} else {
+		greeting = fmt.Sprintf("Welcome to Zeplin. Let's start with %s. Strum when ready.", display)
+	}
+
+	o.speak(greeting)
+	o.publishState(sess, dsp.ChordEvent{}, greeting)
+}
+
 // SetSpeechActive sets the VAD gate for chord suppression.
 // While speech is active, chord events are silently dropped to prevent
 // vocal formants from polluting the chromagram analysis.
@@ -352,17 +374,32 @@ func (o *Orchestrator) publishState(sess *LessonSession, evt dsp.ChordEvent, fee
 	if o.publisher == nil {
 		return
 	}
+	activeTarget := sess.ActiveTarget()
 	update := dsp.UIStateUpdate{
 		Event:         "lesson_state_update",
-		TargetChord:   sess.CurrentStep.TargetChord,
+		TargetChord:   activeTarget,
 		CurrentStreak: sess.SuccessStreak,
 		FeedbackText:  feedback,
 		StringStatus:  make([]string, 6),
 	}
-	for i := range update.StringStatus {
-		update.StringStatus[i] = "ok"
+	targetDef := ChordByName(activeTarget)
+	for i := 0; i < 6; i++ {
+		if targetDef != nil && containsInt(targetDef.MutedStrings, i) {
+			update.StringStatus[i] = "muted"
+		} else {
+			update.StringStatus[i] = "ok"
+		}
 	}
 	o.publisher(update)
+}
+
+func containsInt(slice []int, val int) bool {
+	for _, v := range slice {
+		if v == val {
+			return true
+		}
+	}
+	return false
 }
 
 // findMutedIssues heuristically identifies muted string problems.

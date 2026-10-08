@@ -12,7 +12,8 @@ import {
   Mic,
   Volume2,
   AlertCircle,
-  Pause,
+  Square,
+  MessageSquare,
 } from 'lucide-react';
 
 export default function GuitarCoPilotPage() {
@@ -39,37 +40,31 @@ export default function GuitarCoPilotPage() {
     <div className="min-h-screen bg-[#F6F5EE] text-[#1A231F] flex flex-col justify-between p-4 sm:p-8 font-sans selection:bg-[#E3ECE6]">
       {/* ── TOP HEADER ────────────────────────────────────────────────────────── */}
       <header className="max-w-5xl mx-auto w-full flex items-center justify-between pb-5 border-b border-[#E8E4DA]/80">
-        {/* Brand Logo & Tagline */}
+        {/* Brand Logo & Subtitle */}
         <div className="flex items-center gap-2.5">
           <span className="font-extrabold text-xl tracking-tight text-[#1A231F]">zeplin</span>
           <span className="text-gray-300 font-light">|</span>
           <span className="text-xs sm:text-sm text-[#5D6660] font-medium">Your guitar co-pilot</span>
         </div>
 
-        {/* Status Pill & User Avatar */}
-        <div className="flex items-center gap-3 sm:gap-4">
-          <button
-            onClick={state.connected ? endSession : startSession}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all shadow-sm ${
+        {/* Status Indicator (NOT A BUTTON) & User Avatar */}
+        <div className="flex items-center gap-3">
+          <div
+            className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold transition-all ${
               state.connected
-                ? 'bg-[#E3ECE6] text-[#2E4638] hover:bg-[#D5E2D9]'
-                : 'bg-white border border-[#D5D0C2] text-[#5D6660] hover:bg-[#F2EFE6]'
+                ? 'bg-[#E3ECE6] text-[#2E4638]'
+                : 'bg-[#EDEAE1] text-[#757D77]'
             }`}
           >
-            {state.connected ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-[#2E4638] animate-pulse" />
-                <span>Practice in progress</span>
-              </>
-            ) : (
-              <>
-                <Mic size={13} className="text-[#2E4638]" />
-                <span>Turn on mic &amp; start</span>
-              </>
-            )}
-          </button>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                state.connected ? 'bg-[#2E4638] animate-pulse' : 'bg-[#9BA29D]'
+              }`}
+            />
+            <span>{state.connected ? 'Voice Co-Pilot Active' : 'Offline'}</span>
+          </div>
 
-          {/* User Avatar Circle */}
+          {/* User Avatar */}
           <div className="w-8 h-8 rounded-full bg-[#E5DFD3] text-[#2E4638] font-bold flex items-center justify-center text-xs shadow-inner">
             A
           </div>
@@ -163,7 +158,7 @@ export default function GuitarCoPilotPage() {
             </p>
           </div>
 
-          {/* 3-Column Core: Where your fingers go | Chord Box Diagram & Voice Orb | Reminder */}
+          {/* 3-Column Core: Where your fingers go | Chord Box Diagram & Voice Co-Pilot | Reminder */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
             {/* Left Column: Numbered Finger Placements */}
             <div className="flex flex-col gap-3">
@@ -188,7 +183,7 @@ export default function GuitarCoPilotPage() {
               ))}
             </div>
 
-            {/* Center Column: Interactive Vertical Chord Box Diagram & Integrated Voice Co-Pilot */}
+            {/* Center Column: Interactive Vertical Chord Box Diagram & The SINGLE Voice Co-Pilot Control */}
             <div className="flex flex-col items-center">
               {/* Vertical Fretboard SVG */}
               <ChordDiagram
@@ -196,46 +191,60 @@ export default function GuitarCoPilotPage() {
                 stringStatus={state.stringStatus}
               />
 
-              {/* ── VOICE ASSISTANT INTERACTIVE MIC & SPOKEN FEEDBACK ──────── */}
+              {/* ── THE ONLY VOICE ASSISTANT MIC / CO-PILOT BUTTON ──────── */}
               <div className="w-full mt-4 flex flex-col items-center">
-                <button
-                  onClick={state.connected ? endSession : startSession}
-                  className={`group relative flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-full text-xs font-bold transition-all shadow-sm ${
-                    state.agentState === 'speaking'
-                      ? 'bg-[#2E4638] text-white scale-105 ring-4 ring-[#2E4638]/20'
-                      : state.connected
-                      ? 'bg-[#2E4638] text-white hover:bg-[#243A2E]'
-                      : 'bg-[#2E4638] text-white hover:bg-[#243A2E]'
-                  }`}
-                >
-                  {state.agentState === 'speaking' ? (
-                    <>
-                      <Volume2 size={16} className="animate-bounce" />
-                      <span>Zeplin Speaking...</span>
-                    </>
-                  ) : state.connected ? (
-                    <>
-                      <div className="flex items-center gap-0.5">
-                        <span className="w-1 h-3 bg-white rounded-full animate-[wave_1s_infinite_ease-in-out]" />
-                        <span className="w-1 h-4 bg-white rounded-full animate-[wave_1s_infinite_0.2s_ease-in-out]" />
-                        <span className="w-1 h-2 bg-white rounded-full animate-[wave_1s_infinite_0.4s_ease-in-out]" />
-                      </div>
-                      <Mic size={15} />
-                      <span>Listening for Strum...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Mic size={15} />
-                      <span>Turn On Mic &amp; Start Voice Co-Pilot</span>
-                    </>
-                  )}
-                </button>
+                {!state.connected ? (
+                  <button
+                    onClick={startSession}
+                    className="flex items-center gap-2.5 px-6 py-2.5 rounded-full text-xs font-bold bg-[#2E4638] text-white hover:bg-[#23382C] transition-all shadow-sm"
+                  >
+                    <Mic size={15} />
+                    <span>Start Voice Co-Pilot</span>
+                  </button>
+                ) : (
+                  <div className="flex flex-col items-center">
+                    <div className="flex items-center gap-2 px-5 py-2 rounded-full text-xs font-bold bg-[#2E4638] text-white shadow-sm ring-4 ring-[#2E4638]/15">
+                      {state.agentState === 'speaking' ? (
+                        <>
+                          <Volume2 size={16} className="animate-bounce" />
+                          <span>Zeplin Speaking...</span>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-0.5">
+                            <span className="w-1 h-3 bg-white rounded-full animate-pulse" />
+                            <span className="w-1 h-4 bg-white rounded-full animate-pulse delay-75" />
+                            <span className="w-1 h-2 bg-white rounded-full animate-pulse delay-150" />
+                          </div>
+                          <Mic size={15} />
+                          <span>Listening to You &amp; Guitar</span>
+                        </>
+                      )}
+                    </div>
 
-                {/* Live Spoken Feedback Subtitle */}
+                    <button
+                      onClick={endSession}
+                      className="mt-2 text-[11px] font-semibold text-[#8C938E] hover:text-[#2E4638] flex items-center gap-1 transition-colors"
+                    >
+                      <Square size={9} />
+                      <span>Stop Voice Session</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Live Speech Subtitle Strip */}
                 <div className="mt-2.5 w-full max-w-[280px] text-center">
                   <p className="text-xs font-semibold text-[#1A231F] italic leading-tight">
                     &ldquo;{state.feedbackText}&rdquo;
                   </p>
+
+                  {/* Student Spoken Transcript (shows Zeplin hears your speech) */}
+                  {state.userSpeech && (
+                    <div className="mt-1.5 flex items-center justify-center gap-1 text-[11px] text-[#2E4638] font-medium">
+                      <MessageSquare size={11} />
+                      <span className="italic">You: &ldquo;{state.userSpeech}&rdquo;</span>
+                    </div>
+                  )}
 
                   {/* Chord Detection Telemetry Badge */}
                   {state.detectedChord && (
@@ -293,32 +302,14 @@ export default function GuitarCoPilotPage() {
           Progress, not perfection.
         </p>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={state.connected ? endSession : startSession}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#5D6660] hover:bg-[#EBE7DC] transition-colors"
-          >
-            {state.connected ? (
-              <>
-                <Pause size={13} />
-                <span>Pause</span>
-              </>
-            ) : (
-              <>
-                <Play size={13} />
-                <span>Resume</span>
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={handleNextChord}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold bg-[#2E4638] text-white hover:bg-[#23382C] transition-all shadow-sm"
-          >
-            <span>Next chord</span>
-            <ArrowRight size={13} />
-          </button>
-        </div>
+        {/* Clean Single Action: Next Chord */}
+        <button
+          onClick={handleNextChord}
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold bg-[#2E4638] text-white hover:bg-[#23382C] transition-all shadow-sm"
+        >
+          <span>Next chord</span>
+          <ArrowRight size={13} />
+        </button>
       </footer>
     </div>
   );

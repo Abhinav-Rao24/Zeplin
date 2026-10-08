@@ -74,13 +74,6 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					sessionID := rp.Identity()
 					log.Printf("Audio track subscribed from %s", sessionID)
 
-					if orch != nil {
-						go func() {
-							time.Sleep(500 * time.Millisecond)
-							orch.StartSession(sessionID)
-						}()
-					}
-
 					triggerInterrupt := func() {
 						// Only interrupt if the agent is actively thinking or speaking.
 						// During StateListening there is no active generation to cancel.

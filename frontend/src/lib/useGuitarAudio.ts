@@ -12,6 +12,7 @@ export interface GuitarAudioState {
   inversion: boolean;
   streak: number;
   feedbackText: string;
+  userSpeech?: string;
   stringStatus: string[];
 }
 
@@ -24,48 +25,16 @@ export function useGuitarAudio() {
     confidence: 0,
     inversion: false,
     streak: 0,
-    feedbackText: "Click the mic to start your AI guitar lesson. Zeplin will greet you.",
+    feedbackText: 'Click the button below to start your lesson. Zeplin will greet you.',
+    userSpeech: '',
     stringStatus: ['ok', 'ok', 'ok', 'ok', 'ok', 'ok'],
   });
 
   const roomRef = useRef<LiveKit.Room | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const dspNodeRef = useRef<AudioWorkletNode | null>(null);
-  const livekitAudioActiveRef = useRef<boolean>(false);
-
-  // Reliable vocalizer: Speaks via browser speech synthesis as immediate verbal feedback
-  const speakVoice = useCallback((text: string) => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        const voices = window.speechSynthesis.getVoices();
-        const preferred = voices.find(
-          (v) =>
-            v.lang.startsWith('en') &&
-            (v.name.includes('Natural') ||
-              v.name.includes('Google') ||
-              v.name.includes('Samantha') ||
-              v.name.includes('Daniel') ||
-              v.name.includes('Alex'))
-        ) || voices.find((v) => v.lang.startsWith('en'));
-        if (preferred) utterance.voice = preferred;
-
-        utterance.onend = () => {
-          setState((prev) => ({
-            ...prev,
-            agentState: prev.connected ? 'listening' : 'disconnected',
-          }));
-        };
-
-        window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.warn('SpeechSynthesis error:', err);
-      }
-    }
-  }, []);
+  const localTrackRef = useRef<LiveKit.LocalAudioTrack | null>(null);
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
 
   const startSession = useCallback(async () => {
     try {
@@ -79,7 +48,7 @@ export function useGuitarAudio() {
         },
       });
 
-      // 2. AudioContext at 48kHz
+      // 2. AudioContext at 48kHz for DSP Chord Recognition
       const audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
       audioCtxRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -97,7 +66,6 @@ export function useGuitarAudio() {
         const source = audioCtx.createMediaStreamSource(micStream);
         source.connect(dspNode);
 
-        // DSP message receiver
         dspNode.port.onmessage = (e) => {
           const msg = e.data;
           if (msg.event === 'chord_detected') {
@@ -122,20 +90,10 @@ export function useGuitarAudio() {
         };
         dspNode.port.start();
       } catch (dspErr) {
-        console.warn('AudioWorklet registration note:', dspErr);
+        console.warn('AudioWorklet registration notice:', dspErr);
       }
 
-      // 4. Immediately trigger warm verbal greeting so user hears Zeplin speak
-      const greeting = "Hey there! Welcome to Zeplin. I'm your guitar co-pilot. Let's start with G major. Give me a strum when you're ready.";
-      setState((prev) => ({
-        ...prev,
-        connected: true,
-        agentState: 'speaking',
-        feedbackText: greeting,
-      }));
-      speakVoice(greeting);
-
-      // 5. Connect to LiveKit if Go backend is reachable
+      // 4. Fetch token from Go backend
       let token = '';
       let livekitUrl = 'ws://localhost:7880';
       try {
@@ -150,35 +108,68 @@ export function useGuitarAudio() {
       }
 
       if (token) {
-        const room = new LiveKit.Room({ adaptiveStream: true, dynacast: true });
+        const room = new LiveKit.Room({
+          adaptiveStream: true,
+          dynacast: true,
+          audioCaptureDefaults: {
+            autoGainControl: false,
+            echoCancellation: true,
+            noiseSuppression: false,
+          },
+        });
         roomRef.current = room;
 
-        room.on(LiveKit.RoomEvent.Connected, () => {
-          const audioTrack = micStream.getAudioTracks()[0];
-          if (audioTrack) {
-            room.localParticipant.publishTrack(audioTrack, { name: 'student-audio' });
+        room.on(LiveKit.RoomEvent.Connected, async () => {
+          setState((prev) => ({
+            ...prev,
+            connected: true,
+            agentState: 'listening',
+            feedbackText: 'Zeplin is joining and preparing to speak...',
+          }));
+
+          // Create and publish standard LiveKit LocalAudioTrack
+          try {
+            const localAudioTrack = await LiveKit.createLocalAudioTrack({
+              echoCancellation: true,
+              noiseSuppression: false,
+              autoGainControl: false,
+            });
+            localTrackRef.current = localAudioTrack;
+            await room.localParticipant.publishTrack(localAudioTrack, { name: 'student-audio' });
+            console.log('[LiveKit] Student audio track successfully published to room.');
+          } catch (pubErr) {
+            console.error('Failed to create/publish local audio track:', pubErr);
+            // Fallback to existing stream track if needed
+            const rawTrack = micStream.getAudioTracks()[0];
+            if (rawTrack) {
+              await room.localParticipant.publishTrack(rawTrack, { name: 'student-audio' });
+            }
           }
 
-          // Trigger backend handshake
+          // Trigger single backend handshake for verbal greeting
           setTimeout(() => {
             try {
               room.localParticipant.publishData(
                 new TextEncoder().encode(JSON.stringify({ event: 'student_connected' })),
                 { reliable: true }
               );
+              room.localParticipant.publishData(
+                new TextEncoder().encode(JSON.stringify({ event: 'set_target_chord', chord: 'G_Major' })),
+                { reliable: true }
+              );
             } catch (e) {
               console.error('Handshake publish error:', e);
             }
-          }, 400);
+          }, 300);
         });
 
-        // Attach agent voice track if backend Deepgram TTS is streaming
+        // Attach agent voice track (Deepgram TTS via LiveKit)
         room.on(LiveKit.RoomEvent.TrackSubscribed, (track: LiveKit.RemoteTrack) => {
           if (track.kind === LiveKit.Track.Kind.Audio) {
-            livekitAudioActiveRef.current = true;
             const el = track.attach();
             el.autoplay = true;
             document.body.appendChild(el);
+            console.log('[LiveKit] Agent audio track attached to DOM and playing.');
           }
         });
 
@@ -202,8 +193,10 @@ export function useGuitarAudio() {
                 agentState: fb ? 'speaking' : 'listening',
               }));
 
-              if (fb && !livekitAudioActiveRef.current) {
-                speakVoice(fb);
+              if (fb) {
+                setTimeout(() => {
+                  setState((prev) => ({ ...prev, agentState: 'listening' }));
+                }, 4000);
               }
             }
           } catch (err) {
@@ -212,23 +205,106 @@ export function useGuitarAudio() {
         });
 
         await room.connect(livekitUrl, token);
+      } else {
+        setState((prev) => ({
+          ...prev,
+          connected: true,
+          agentState: 'listening',
+          feedbackText: 'Listening for your chords (standalone mode)...',
+        }));
+      }
+
+      // 5. Browser Speech Recognition (Listen to Student's Voice in parallel)
+      const win = window as unknown as {
+        SpeechRecognition?: new () => {
+          continuous: boolean;
+          interimResults: boolean;
+          lang: string;
+          start: () => void;
+          stop: () => void;
+          onresult: (ev: {
+            resultIndex: number;
+            results: { length: number; [index: number]: { [index: number]: { transcript: string } } };
+          }) => void;
+          onerror: (err: unknown) => void;
+        };
+        webkitSpeechRecognition?: new () => {
+          continuous: boolean;
+          interimResults: boolean;
+          lang: string;
+          start: () => void;
+          stop: () => void;
+          onresult: (ev: {
+            resultIndex: number;
+            results: { length: number; [index: number]: { [index: number]: { transcript: string } } };
+          }) => void;
+          onerror: (err: unknown) => void;
+        };
+      };
+
+      const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        try {
+          const rec = new SpeechRecognition();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.lang = 'en-US';
+
+          rec.onresult = (ev) => {
+            let transcript = '';
+            for (let i = ev.resultIndex; i < ev.results.length; ++i) {
+              transcript += ev.results[i][0].transcript;
+            }
+            if (transcript.trim()) {
+              setState((prev) => ({ ...prev, userSpeech: transcript.trim() }));
+
+              // Forward user speech question to backend brain via DataChannel
+              if (
+                roomRef.current &&
+                roomRef.current.state === LiveKit.ConnectionState.Connected
+              ) {
+                try {
+                  roomRef.current.localParticipant.publishData(
+                    new TextEncoder().encode(
+                      JSON.stringify({ event: 'student_speech', text: transcript.trim() })
+                    ),
+                    { reliable: true }
+                  );
+                } catch (err) {
+                  console.error('Failed to forward speech:', err);
+                }
+              }
+            }
+          };
+
+          rec.onerror = () => {};
+
+          rec.start();
+          recognitionRef.current = rec;
+        } catch (recErr) {
+          console.warn('SpeechRecognition start notice:', recErr);
+        }
       }
     } catch (err) {
       console.error('Failed to start guitar session:', err);
-      // Fallback greeting even if mic permission prompt has delay
-      const fallbackGreeting = "Hey there! Welcome to Zeplin. Let's practice G major together. Click again to enable microphone.";
       setState((prev) => ({
         ...prev,
         connected: false,
-        feedbackText: fallbackGreeting,
+        feedbackText: 'Microphone access denied. Please click to allow mic permissions.',
       }));
-      speakVoice(fallbackGreeting);
     }
-  }, [speakVoice]);
+  }, []);
 
   const endSession = useCallback(() => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    if (localTrackRef.current) {
+      localTrackRef.current.stop();
+      localTrackRef.current = null;
     }
     if (roomRef.current) {
       roomRef.current.disconnect();
@@ -242,7 +318,8 @@ export function useGuitarAudio() {
       ...prev,
       connected: false,
       agentState: 'disconnected',
-      feedbackText: 'Session ended. Click the mic to practice again.',
+      userSpeech: '',
+      feedbackText: 'Session stopped. Click below to start practicing.',
     }));
   }, []);
 
@@ -295,32 +372,26 @@ export function useGuitarAudio() {
     }
   }, []);
 
-  const changeTargetChord = useCallback(
-    (chordId: string) => {
-      const chordDisplay = chordId.replace('_', ' ');
-      const switchMsg = `Switching to ${chordDisplay}. Place your fingers and strum cleanly.`;
-      setState((prev) => ({
-        ...prev,
-        targetChord: chordId,
-        streak: 0,
-        agentState: 'speaking',
-        feedbackText: switchMsg,
-      }));
-      speakVoice(switchMsg);
+  const changeTargetChord = useCallback((chordId: string) => {
+    setState((prev) => ({
+      ...prev,
+      targetChord: chordId,
+      streak: 0,
+      agentState: 'listening',
+      feedbackText: `Target changed to ${chordId.replace('_', ' ')}. Strum cleanly when ready.`,
+    }));
 
-      if (roomRef.current && roomRef.current.state === LiveKit.ConnectionState.Connected) {
-        try {
-          roomRef.current.localParticipant.publishData(
-            new TextEncoder().encode(JSON.stringify({ event: 'set_target_chord', chord: chordId })),
-            { reliable: true }
-          );
-        } catch (e) {
-          console.error('Failed to set target chord:', e);
-        }
+    if (roomRef.current && roomRef.current.state === LiveKit.ConnectionState.Connected) {
+      try {
+        roomRef.current.localParticipant.publishData(
+          new TextEncoder().encode(JSON.stringify({ event: 'set_target_chord', chord: chordId })),
+          { reliable: true }
+        );
+      } catch (e) {
+        console.error('Failed to set target chord:', e);
       }
-    },
-    [speakVoice]
-  );
+    }
+  }, []);
 
   useEffect(() => {
     return () => {

@@ -102,6 +102,15 @@ func (o *Orchestrator) GetOrCreateSession(sessionID string) *LessonSession {
 // and gives the introductory verbal prompt.
 func (o *Orchestrator) StartSession(sessionID string) {
 	sess := o.GetOrCreateSession(sessionID)
+
+	o.mu.Lock()
+	if !sess.lastGreetingAt.IsZero() && time.Since(sess.lastGreetingAt) < 3*time.Second {
+		o.mu.Unlock()
+		return
+	}
+	sess.lastGreetingAt = time.Now()
+	o.mu.Unlock()
+
 	target := sess.ActiveTarget()
 	targetDef := ChordByName(target)
 	display := target

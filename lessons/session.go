@@ -55,6 +55,7 @@ type LessonSession struct {
 	SessionID    string
 	StudentName  string
 	StartedAt    time.Time
+	lastGreetingAt time.Time
 
 	// Curriculum progress
 	CurriculumIdx int        // index into V1Curriculum

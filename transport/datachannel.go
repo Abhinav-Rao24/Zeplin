@@ -51,6 +51,15 @@ func AttachDataChannelHandler(roomCB *lksdk.RoomCallback, orch *lessons.Orchestr
 				orch.SetTargetChord(senderID, payload.Chord)
 			}
 
+		case "student_speech", "speech_transcript":
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(data, &payload); err == nil && payload.Text != "" {
+				log.Printf("[DataChannel] Student speech from %s: %q", senderID, payload.Text)
+				orch.HandleSpeech(context.Background(), senderID, payload.Text)
+			}
+
 		case "chord_detected":
 			var evt dsp.ChordEvent
 			if err := json.Unmarshal(data, &evt); err != nil {

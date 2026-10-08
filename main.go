@@ -17,7 +17,7 @@ import (
 	"github.com/Abhinav-Rao24/Zeplin/tts"
 )
 
-//go:embed client
+//go:embed all:client
 var clientFS embed.FS
 
 func main() {

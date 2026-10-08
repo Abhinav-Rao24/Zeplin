@@ -29,9 +29,25 @@ type HTTPServerConfig struct {
 func ServeClient(cfg HTTPServerConfig, clientFS fs.FS) {
 	mux := http.NewServeMux()
 
-	// 1. Static client assets
+	// 1. Static client assets with explicit MIME headers for Windows compatibility
 	fileServer := http.FileServer(http.FS(clientFS))
-	mux.Handle("/", fileServer)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if len(path) >= 4 && path[len(path)-4:] == ".css" {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		} else if len(path) >= 3 && path[len(path)-3:] == ".js" {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		} else if len(path) >= 4 && path[len(path)-4:] == ".mjs" {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		} else if len(path) >= 5 && path[len(path)-5:] == ".wasm" {
+			w.Header().Set("Content-Type", "application/wasm")
+		} else if len(path) >= 4 && path[len(path)-4:] == ".svg" {
+			w.Header().Set("Content-Type", "image/svg+xml")
+		} else if len(path) >= 5 && path[len(path)-5:] == ".json" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 
 	// 2. Token minting endpoint (/api/token)
 	mux.HandleFunc("/api/token", func(w http.ResponseWriter, r *http.Request) {

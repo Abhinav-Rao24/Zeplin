@@ -7,17 +7,12 @@ import { StrummingPattern } from '@/components/StrummingPattern';
 import { useGuitarAudio } from '@/lib/useGuitarAudio';
 import {
   ChevronRight,
-  Headphones,
-  Pause,
   Play,
   ArrowRight,
   Mic,
-  MicOff,
-  Sparkles,
   Volume2,
   AlertCircle,
-  HelpCircle,
-  Radio,
+  Pause,
 } from 'lucide-react';
 
 export default function GuitarCoPilotPage() {
@@ -41,53 +36,40 @@ export default function GuitarCoPilotPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F6F5EE] text-[#1A231F] flex flex-col justify-between p-4 md:p-8 selection:bg-[#E3ECE6]">
+    <div className="min-h-screen bg-[#F6F5EE] text-[#1A231F] flex flex-col justify-between p-4 sm:p-8 font-sans selection:bg-[#E3ECE6]">
       {/* ── TOP HEADER ────────────────────────────────────────────────────────── */}
-      <header className="max-w-5xl mx-auto w-full flex items-center justify-between pb-5 border-b border-[#E8E4DA]/70">
-        {/* Brand Logo */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-[#2E4638] flex items-center justify-center text-white shadow-sm">
-            <Radio size={18} className="stroke-[2.2] animate-pulse" />
-          </div>
-          <div className="flex flex-col">
-            <div className="flex items-baseline gap-2">
-              <span className="font-extrabold text-lg tracking-tight text-[#1C2520]">Zeplin</span>
-              <span className="text-xs text-[#6F7771] font-medium hidden sm:inline">
-                | AI Guitar Voice Assistant
-              </span>
-            </div>
-            <span className="text-[11px] text-[#2E4638] font-bold flex items-center gap-1">
-              <Sparkles size={11} /> Real-Time DSP &amp; Speech Co-Pilot
-            </span>
-          </div>
+      <header className="max-w-5xl mx-auto w-full flex items-center justify-between pb-5 border-b border-[#E8E4DA]/80">
+        {/* Brand Logo & Tagline */}
+        <div className="flex items-center gap-2.5">
+          <span className="font-extrabold text-xl tracking-tight text-[#1A231F]">zeplin</span>
+          <span className="text-gray-300 font-light">|</span>
+          <span className="text-xs sm:text-sm text-[#5D6660] font-medium">Your guitar co-pilot</span>
         </div>
 
-        {/* Status & Mic Session Toggle */}
-        <div className="flex items-center gap-3 sm:gap-5">
-          {/* Main Voice Assistant Activation Pill Button */}
+        {/* Status Pill & User Avatar */}
+        <div className="flex items-center gap-3 sm:gap-4">
           <button
             onClick={state.connected ? endSession : startSession}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all shadow-sm ${
               state.connected
-                ? 'bg-[#2E4638] text-white hover:bg-[#243A2E]'
-                : 'bg-white border border-[#D5D0C2] text-[#2E4638] hover:bg-[#F2EFE6]'
+                ? 'bg-[#E3ECE6] text-[#2E4638] hover:bg-[#D5E2D9]'
+                : 'bg-white border border-[#D5D0C2] text-[#5D6660] hover:bg-[#F2EFE6]'
             }`}
           >
             {state.connected ? (
               <>
-                <span className="w-2 h-2 rounded-full bg-[#4ADE80] animate-ping" />
-                <Mic size={14} />
-                <span>Voice Agent Active</span>
+                <span className="w-2 h-2 rounded-full bg-[#2E4638] animate-pulse" />
+                <span>Practice in progress</span>
               </>
             ) : (
               <>
-                <MicOff size={14} className="text-[#8C948E]" />
-                <span>Turn On Mic &amp; Start</span>
+                <Mic size={13} className="text-[#2E4638]" />
+                <span>Turn on mic &amp; start</span>
               </>
             )}
           </button>
 
-          {/* User Avatar */}
+          {/* User Avatar Circle */}
           <div className="w-8 h-8 rounded-full bg-[#E5DFD3] text-[#2E4638] font-bold flex items-center justify-center text-xs shadow-inner">
             A
           </div>
@@ -95,8 +77,8 @@ export default function GuitarCoPilotPage() {
       </header>
 
       {/* ── MAIN STAGE ────────────────────────────────────────────────────────── */}
-      <main className="max-w-5xl mx-auto w-full flex-1 my-5 flex flex-col justify-center">
-        {/* Lesson Title & Sequence Nav */}
+      <main className="max-w-5xl mx-auto w-full flex-1 my-6 flex flex-col justify-center">
+        {/* Lesson Subheader Row */}
         <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-5 gap-3">
           <div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#1A231F]">
@@ -107,18 +89,18 @@ export default function GuitarCoPilotPage() {
             </p>
           </div>
 
-          <div className="text-left sm:text-right">
+          <div className="text-left sm:text-right shrink-0">
             <span className="text-xs font-bold text-[#1C2520] block">
-              The Essentials · Lesson 01
+              The essentials · Lesson 01
             </span>
             <span className="text-xs text-[#707872]">
-              3 chords · Interactive Voice Mode
+              3 chords · AI Voice Mode
             </span>
           </div>
         </div>
 
         {/* Chord Step Pills Bar */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             {LESSON_SEQUENCE.map((chordId, idx) => {
               const chord = CHORD_LIBRARY[chordId];
@@ -127,7 +109,7 @@ export default function GuitarCoPilotPage() {
                 <React.Fragment key={chordId}>
                   <button
                     onClick={() => handleSelectChord(idx)}
-                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
                       isActive
                         ? 'bg-[#2E4638] text-white shadow-sm'
                         : 'bg-[#EDEAE1] text-[#69726A] hover:bg-[#E3DFD5]'
@@ -149,7 +131,7 @@ export default function GuitarCoPilotPage() {
           {/* Clean Streak Indicator */}
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold uppercase tracking-wider text-[#7A837C]">
-              Clean Streak:
+              Clean streak:
             </span>
             <div className="flex items-center gap-1">
               {[0, 1, 2, 3, 4].map((i) => (
@@ -157,7 +139,7 @@ export default function GuitarCoPilotPage() {
                   key={i}
                   className={`w-2.5 h-2.5 rounded-full border transition-all ${
                     i < state.streak
-                      ? 'bg-[#2E7D32] border-[#2E7D32] shadow-sm'
+                      ? 'bg-[#2E4638] border-[#2E4638] shadow-sm'
                       : 'bg-transparent border-[#B5B0A4]'
                   }`}
                 />
@@ -166,86 +148,9 @@ export default function GuitarCoPilotPage() {
           </div>
         </div>
 
-        {/* ── VOICE ASSISTANT HERO CARD ──────────────────────────────────────── */}
-        <div className="bg-white border border-[#E8E4DA] rounded-2xl p-6 sm:p-7 shadow-[0_2px_16px_rgba(0,0,0,0.03)]">
-          {/* Prominent Voice Assistant Live Speech Banner */}
-          <div className="mb-6 p-4 rounded-xl bg-[#FAF9F5] border border-[#EAE6DC] flex flex-col sm:flex-row items-center gap-4">
-            {/* Reactive Voice Orb / Audio Visualizer */}
-            <div className="relative shrink-0 flex items-center justify-center">
-              <div
-                className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 shadow-sm ${
-                  state.agentState === 'speaking'
-                    ? 'bg-[#2E4638] text-white scale-105'
-                    : state.connected
-                    ? 'bg-[#E2ECE5] text-[#2E4638]'
-                    : 'bg-[#EAE5D9] text-[#787E79]'
-                }`}
-              >
-                {state.connected && (
-                  <span className="absolute inset-0 rounded-full border-2 border-[#2E4638] opacity-50 animate-ping pointer-events-none" />
-                )}
-
-                {state.agentState === 'speaking' ? (
-                  <Volume2 size={24} className="stroke-[2.2] animate-bounce" />
-                ) : (
-                  <Mic size={24} className="stroke-[2.2]" />
-                )}
-              </div>
-            </div>
-
-            {/* Voice Dialogue & Live Spoken Transcript */}
-            <div className="flex-1 text-center sm:text-left">
-              <div className="flex items-center justify-center sm:justify-start gap-2 mb-1">
-                <span className="text-xs font-extrabold uppercase tracking-wider text-[#2E4638] flex items-center gap-1">
-                  <Sparkles size={12} />
-                  {state.agentState === 'speaking'
-                    ? 'Zeplin Speaking'
-                    : state.connected
-                    ? 'Zeplin Listening to Your Guitar'
-                    : 'Voice Assistant Offline'}
-                </span>
-
-                {state.connected && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E5ECE7] text-[#2B4337]">
-                    Active 48kHz Stream
-                  </span>
-                )}
-              </div>
-
-              {/* Dynamic Spoken Feedback Subtitle */}
-              <p className="text-sm font-semibold text-[#1A231F] italic leading-snug">
-                {state.connected
-                  ? `"${state.feedbackText}"`
-                  : 'Click "Turn On Mic & Start" to activate your AI guitar teacher. Zeplin will greet you and guide your playing.'}
-              </p>
-
-              {/* Live Audio Detection Telemetry Pill */}
-              {state.detectedChord && (
-                <div className="inline-flex items-center gap-2 mt-2 px-2.5 py-0.5 rounded-full text-xs bg-[#EAF0EC] text-[#243A2E] font-medium">
-                  <span>Detected Chord:</span>
-                  <strong className="text-[#1A231F]">{state.detectedChord.replace('_', ' ')}</strong>
-                  <span className="text-[#59665E]">({Math.round(state.confidence * 100)}% confidence)</span>
-                  {state.inversion && (
-                    <span className="flex items-center gap-0.5 text-red-600 font-bold">
-                      <AlertCircle size={11} /> Low string ringing
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Quick Action Button */}
-            {!state.connected && (
-              <button
-                onClick={startSession}
-                className="shrink-0 px-4 py-2 rounded-lg text-xs font-bold bg-[#2E4638] text-white hover:bg-[#24392D] transition-colors shadow-sm"
-              >
-                Start Lesson &amp; Greet
-              </button>
-            )}
-          </div>
-
-          {/* Card Title Bar */}
+        {/* ── MAIN WHITE LESSON CARD ──────────────────────────────────────── */}
+        <div className="bg-white border border-[#E8E4DA] rounded-2xl p-6 sm:p-8 shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
+          {/* Top Title Bar of the Card */}
           <div className="text-center mb-6">
             <span className="text-[11px] font-bold uppercase tracking-widest text-[#7C857E]">
               YOUR CURRENT CHORD
@@ -253,16 +158,16 @@ export default function GuitarCoPilotPage() {
             <h2 className="text-3xl sm:text-4xl font-extrabold text-[#1A231F] mt-0.5 tracking-tight">
               {chordData.name}
             </h2>
-            <p className="text-sm text-[#6C756E] mt-1 font-medium">
+            <p className="text-xs sm:text-sm text-[#6C756E] mt-1 font-medium">
               {chordData.subtitle}
             </p>
           </div>
 
-          {/* 3-Column Core: Where your fingers go | Chord Box | Reminder */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start pt-1">
+          {/* 3-Column Core: Where your fingers go | Chord Box Diagram & Voice Orb | Reminder */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
             {/* Left Column: Numbered Finger Placements */}
             <div className="flex flex-col gap-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-[#6B756E] mb-0.5">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#6B756E] mb-1">
                 Where your fingers go
               </h3>
 
@@ -283,15 +188,73 @@ export default function GuitarCoPilotPage() {
               ))}
             </div>
 
-            {/* Center Column: Interactive Vertical Chord Box Diagram */}
+            {/* Center Column: Interactive Vertical Chord Box Diagram & Integrated Voice Co-Pilot */}
             <div className="flex flex-col items-center">
+              {/* Vertical Fretboard SVG */}
               <ChordDiagram
                 chord={chordData}
                 stringStatus={state.stringStatus}
               />
+
+              {/* ── VOICE ASSISTANT INTERACTIVE MIC & SPOKEN FEEDBACK ──────── */}
+              <div className="w-full mt-4 flex flex-col items-center">
+                <button
+                  onClick={state.connected ? endSession : startSession}
+                  className={`group relative flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-full text-xs font-bold transition-all shadow-sm ${
+                    state.agentState === 'speaking'
+                      ? 'bg-[#2E4638] text-white scale-105 ring-4 ring-[#2E4638]/20'
+                      : state.connected
+                      ? 'bg-[#2E4638] text-white hover:bg-[#243A2E]'
+                      : 'bg-[#2E4638] text-white hover:bg-[#243A2E]'
+                  }`}
+                >
+                  {state.agentState === 'speaking' ? (
+                    <>
+                      <Volume2 size={16} className="animate-bounce" />
+                      <span>Zeplin Speaking...</span>
+                    </>
+                  ) : state.connected ? (
+                    <>
+                      <div className="flex items-center gap-0.5">
+                        <span className="w-1 h-3 bg-white rounded-full animate-[wave_1s_infinite_ease-in-out]" />
+                        <span className="w-1 h-4 bg-white rounded-full animate-[wave_1s_infinite_0.2s_ease-in-out]" />
+                        <span className="w-1 h-2 bg-white rounded-full animate-[wave_1s_infinite_0.4s_ease-in-out]" />
+                      </div>
+                      <Mic size={15} />
+                      <span>Listening for Strum...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic size={15} />
+                      <span>Turn On Mic &amp; Start Voice Co-Pilot</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Live Spoken Feedback Subtitle */}
+                <div className="mt-2.5 w-full max-w-[280px] text-center">
+                  <p className="text-xs font-semibold text-[#1A231F] italic leading-tight">
+                    &ldquo;{state.feedbackText}&rdquo;
+                  </p>
+
+                  {/* Chord Detection Telemetry Badge */}
+                  {state.detectedChord && (
+                    <div className="inline-flex items-center gap-1.5 mt-2 px-2.5 py-0.5 rounded-full text-[11px] bg-[#EAF0EC] text-[#243A2E] font-medium">
+                      <span>Detected:</span>
+                      <strong className="text-[#1A231F]">{state.detectedChord.replace('_', ' ')}</strong>
+                      <span className="text-[#59665E]">({Math.round(state.confidence * 100)}%)</span>
+                      {state.inversion && (
+                        <span className="flex items-center gap-0.5 text-red-600 font-bold">
+                          <AlertCircle size={10} /> Low buzz
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Right Column: Technique Reminder & Audio Sample */}
+            {/* Right Column: Technique Reminder & Hear Chord Audio */}
             <div className="flex flex-col gap-3 md:pl-2">
               <div className="bg-[#FAF9F5] border border-[#E8E4DA] rounded-xl p-3.5">
                 <div className="flex items-center gap-1.5 text-xs font-bold text-[#1C2520] mb-1.5">
@@ -315,7 +278,7 @@ export default function GuitarCoPilotPage() {
             </div>
           </div>
 
-          {/* Strumming Pattern Arrows (Prominently displayed) */}
+          {/* Strumming Pattern Arrows (Prominently displayed with Arrow blocks) */}
           <StrummingPattern
             name={chordData.strummingPattern.name}
             meter={chordData.strummingPattern.meter}
@@ -324,55 +287,36 @@ export default function GuitarCoPilotPage() {
         </div>
       </main>
 
-      {/* ── BOTTOM STAGE BAR ──────────────────────────────────────────────────── */}
-      <footer className="max-w-5xl mx-auto w-full pt-3">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 py-3">
-          {/* Reassurance Encouragement */}
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-[#EDEAE1] flex items-center justify-center text-[#525B54]">
-              <Headphones size={16} />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-[#1C2520]">Progress, not perfection.</h4>
-              <p className="text-[11px] text-[#6C756E]">Stay with this chord as long as you like.</p>
-            </div>
-          </div>
+      {/* ── BOTTOM BAR ────────────────────────────────────────────────────────── */}
+      <footer className="max-w-5xl mx-auto w-full flex items-center justify-between pt-4 border-t border-[#E8E4DA]/80">
+        <p className="text-xs text-[#707872] italic font-serif">
+          Progress, not perfection.
+        </p>
 
-          {/* Navigation & Controls */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                if (state.connected) {
-                  endSession();
-                } else {
-                  startSession();
-                }
-              }}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold border border-[#DCD7CA] bg-white text-[#2B352E] hover:bg-[#F2EFE7] transition-colors shadow-sm"
-            >
-              {state.connected ? <Pause size={13} /> : <Play size={13} />}
-              <span>{state.connected ? 'Pause Session' : 'Resume'}</span>
-            </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={state.connected ? endSession : startSession}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#5D6660] hover:bg-[#EBE7DC] transition-colors"
+          >
+            {state.connected ? (
+              <>
+                <Pause size={13} />
+                <span>Pause</span>
+              </>
+            ) : (
+              <>
+                <Play size={13} />
+                <span>Resume</span>
+              </>
+            )}
+          </button>
 
-            <button
-              onClick={handleNextChord}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg text-xs font-bold bg-[#2E4638] text-white hover:bg-[#24392D] transition-all shadow-sm"
-            >
-              <span>Next chord</span>
-              <ArrowRight size={14} />
-            </button>
-          </div>
-        </div>
-
-        {/* Micro Sub-footer */}
-        <div className="flex items-center justify-between text-[11px] text-[#8C948D] pt-4 border-t border-[#E8E4DA]/60 mt-1">
-          <div className="flex items-center gap-1.5">
-            <Mic size={12} />
-            <span>48kHz microphone · Continuous DSP onset gating</span>
-          </div>
-          <button className="flex items-center gap-1 hover:text-[#1A231F] transition-colors">
-            <HelpCircle size={12} />
-            <span>Need a hand?</span>
+          <button
+            onClick={handleNextChord}
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold bg-[#2E4638] text-white hover:bg-[#23382C] transition-all shadow-sm"
+          >
+            <span>Next chord</span>
+            <ArrowRight size={13} />
           </button>
         </div>
       </footer>

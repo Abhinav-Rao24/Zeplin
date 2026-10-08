@@ -11,8 +11,17 @@ import (
 
 	"github.com/Abhinav-Rao24/Zeplin/brain"
 	"github.com/Abhinav-Rao24/Zeplin/dsp"
+	"github.com/Abhinav-Rao24/Zeplin/memory"
 	"github.com/Abhinav-Rao24/Zeplin/tts"
 )
+
+// Store defines persistence operations needed by the Orchestrator.
+type Store interface {
+	SaveCurriculumProgress(studentID string, stepID, streak int, completedSteps []int) error
+	GetCurriculumProgress(studentID string) (stepID, streak int, completedSteps []int, err error)
+	RecordMistake(studentID, chordName, mistakeType, details string) error
+	SaveSession(rec memory.SessionRecord) error
+}
 
 // FeedbackPublisher is a function that sends a UI state update to the
 // browser client over the LiveKit DataChannel. Injected at construction.
@@ -31,6 +40,7 @@ type Orchestrator struct {
 	brain     *brain.Brain
 	tts       *tts.DeepgramStreamTTS
 	publisher FeedbackPublisher
+	store     Store
 
 	mu       sync.Mutex
 	sessions map[string]*LessonSession // keyed by participant identity
@@ -59,8 +69,15 @@ func (o *Orchestrator) SetPublisher(pub FeedbackPublisher) {
 	o.publisher = pub
 }
 
+// SetStore injects a persistent SQLite store into the Orchestrator.
+func (o *Orchestrator) SetStore(s Store) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.store = s
+}
+
 // GetOrCreateSession returns the LessonSession for a participant, creating
-// one on first contact.
+// one on first contact. If a store is available, it restores previous curriculum progress.
 func (o *Orchestrator) GetOrCreateSession(sessionID string) *LessonSession {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -68,6 +85,14 @@ func (o *Orchestrator) GetOrCreateSession(sessionID string) *LessonSession {
 		return sess
 	}
 	sess := NewLessonSession(sessionID, sessionID)
+	if o.store != nil {
+		stepID, streak, _, err := o.store.GetCurriculumProgress(sessionID)
+		if err == nil && stepID > 0 {
+			sess.setStep(stepID - 1)
+			sess.SuccessStreak = streak
+			log.Printf("[Orchestrator] Resumed curriculum at step %d (streak %d) for %s", stepID, streak, sessionID)
+		}
+	}
 	o.sessions[sessionID] = sess
 	log.Printf("[Orchestrator] New lesson session started for participant: %s", sessionID)
 	return sess
@@ -128,6 +153,9 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 	// ── Case 2: Correct chord, wrong bass (inversion / stray open string) ─
 	if evt.DetectedChord == target && evt.Inversion {
 		sess.RecordMistake(MistakeInversion)
+		if o.store != nil {
+			_ = o.store.RecordMistake(sess.SessionID, target, string(MistakeInversion), evt.BassNote)
+		}
 		sess.ResetStreak()
 		msg := fmt.Sprintf("Watch your %s string — it's ringing out. Mute it.", evt.BassNote)
 		o.speak(msg)
@@ -138,6 +166,9 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 	// ── Case 3: Correct chord name, but one string muted/buzzing ─────────
 	if evt.DetectedChord == target && len(mutedIssues) > 0 {
 		sess.RecordMistake(MistakeMutedString)
+		if o.store != nil {
+			_ = o.store.RecordMistake(sess.SessionID, target, string(MistakeMutedString), stringIndexToName(mutedIssues[0]))
+		}
 		sess.ResetStreak()
 		stringName := stringIndexToName(mutedIssues[0])
 		msg := fmt.Sprintf("Your %s string is muted. Arch your fretting finger.", stringName)
@@ -148,6 +179,9 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 
 	// ── Case 4: Wrong chord entirely ──────────────────────────────────────
 	sess.RecordMistake(MistakeWrongChord)
+	if o.store != nil {
+		_ = o.store.RecordMistake(sess.SessionID, target, string(MistakeWrongChord), evt.DetectedChord)
+	}
 	sess.ResetStreak()
 
 	targetDisplay := displayName(target)
@@ -185,6 +219,9 @@ func (o *Orchestrator) onExerciseComplete(sess *LessonSession, evt dsp.ChordEven
 	// Advance to next curriculum step
 	advanced := sess.AdvanceStep()
 	if advanced {
+		if o.store != nil {
+			_ = o.store.SaveCurriculumProgress(sess.SessionID, sess.CurriculumIdx+1, sess.SuccessStreak, nil)
+		}
 		nextDef := ChordByName(sess.CurrentStep.TargetChord)
 		if nextDef != nil {
 			msg := fmt.Sprintf("Excellent! Now let's learn %s.", nextDef.DisplayName)
@@ -194,6 +231,38 @@ func (o *Orchestrator) onExerciseComplete(sess *LessonSession, evt dsp.ChordEven
 	} else {
 		o.speak("You've completed all the beginner chords. Excellent work!")
 		o.publishState(sess, evt, "All done!")
+	}
+}
+
+// CloseSession finalizes and logs a completed practice session to SQLite.
+func (o *Orchestrator) CloseSession(sessionID string) {
+	o.mu.Lock()
+	sess, ok := o.sessions[sessionID]
+	if ok {
+		delete(o.sessions, sessionID)
+	}
+	o.mu.Unlock()
+
+	if !ok || o.store == nil {
+		return
+	}
+
+	ended := time.Now()
+	dur := int(ended.Sub(sess.StartedAt).Seconds())
+	rec := memory.SessionRecord{
+		ID:                fmt.Sprintf("sess_%s_%d", sessionID, sess.StartedAt.Unix()),
+		StudentID:         sessionID,
+		StartedAt:         sess.StartedAt,
+		EndedAt:           ended,
+		DurationSec:       dur,
+		TotalStrums:       sess.TotalStrums,
+		CleanStrums:       sess.TotalCorrect,
+		TuningOffsetCents: sess.TuningOffsetCents,
+	}
+	if err := o.store.SaveSession(rec); err != nil {
+		log.Printf("[Orchestrator] Error saving session record: %v", err)
+	} else {
+		log.Printf("[Orchestrator] Practice session saved to SQLite for %s (%d strums, %ds)", sessionID, sess.TotalStrums, dur)
 	}
 }
 

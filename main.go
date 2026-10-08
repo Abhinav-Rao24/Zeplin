@@ -27,13 +27,18 @@ func main() {
 	cfg := config.Load()
 	log.Println("Configuration loaded.")
 
-	// ── In-Memory Session Store ────────────────────────────────────────────
-	memStore := memory.NewInMemoryStore()
-	log.Println("Session memory store initialized.")
+	// ── SQLite Persistent Session Store (pure Go, zero CGO) ───────────────
+	dbPath := "zeplin_guitar.db"
+	sqlStore, err := memory.NewSQLiteStore(dbPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize SQLite store: %v", err)
+	}
+	defer sqlStore.Close()
+	log.Printf("SQLite session store initialized at %s", dbPath)
 
 	// ── Groq Brain (guitar coach persona) ─────────────────────────────────
 	ctx := context.Background()
-	brainEngine, err := brain.NewBrain(ctx, cfg.GroqAPIKey, memStore)
+	brainEngine, err := brain.NewBrain(ctx, cfg.GroqAPIKey, sqlStore)
 	if err != nil {
 		log.Fatalf("Failed to initialize Groq brain: %v", err)
 	}
@@ -48,18 +53,22 @@ func main() {
 	log.Println("Deepgram TTS engine initialized.")
 
 	// ── Lesson Orchestrator ────────────────────────────────────────────────
-	// The orchestrator is constructed without a publisher first; the publisher
-	// is injected after the LiveKit room is connected (so it can hold a room ref).
 	orchestrator := lessons.NewOrchestrator(brainEngine, ttsEngine, nil)
-	log.Println("Lesson orchestrator initialized.")
+	orchestrator.SetStore(sqlStore)
+	log.Println("Lesson orchestrator initialized with SQLite persistence.")
 
-	// ── HTTP Client Server (embed.FS → localhost:8080) ─────────────────────
-	// Sub into the client/ directory so the server root maps to client/index.html
+	// ── HTTP Client Server (embed.FS + /api/token → localhost:8080) ────────
 	subFS, err := fs.Sub(clientFS, "client")
 	if err != nil {
 		log.Fatalf("Failed to sub into client FS: %v", err)
 	}
-	transport.ServeClient(cfg.HTTPPort, subFS)
+	transport.ServeClient(transport.HTTPServerConfig{
+		Port:             cfg.HTTPPort,
+		LivekitURL:       cfg.LivekitURL,
+		LivekitAPIKey:    cfg.LivekitAPIKey,
+		LivekitAPISecret: cfg.LivekitAPISecret,
+		DefaultRoom:      "voice-agent-room",
+	}, subFS)
 	log.Printf("Client available at http://localhost:%s", cfg.HTTPPort)
 
 	// ── LiveKit Room Connection ────────────────────────────────────────────

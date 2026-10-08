@@ -82,9 +82,28 @@ async function startZeplin() {
   log('Microphone → AudioWorklet pipeline active');
 
   // 5. Connect to LiveKit
-  if (!LIVEKIT_TOKEN) {
-    log('No LiveKit token set (window.ZEPLIN_LIVEKIT_TOKEN). Running in standalone DSP-only mode.');
-    log('Chord events will appear in the console. Connect to LiveKit to enable full co-pilot mode.');
+  let token = LIVEKIT_TOKEN;
+  let serverUrl = LIVEKIT_URL;
+
+  if (!token) {
+    try {
+      log('Fetching LiveKit session token from /api/token...');
+      const resp = await fetch('/api/token');
+      if (resp.ok) {
+        const data = await resp.json();
+        token = data.token;
+        serverUrl = data.url || serverUrl;
+        log('Token minted successfully for room:', data.room);
+      } else {
+        log('Token endpoint returned status ' + resp.status + '. Running in local DSP-only mode.');
+      }
+    } catch (e) {
+      log('Could not fetch token from /api/token. Running in local DSP-only mode.');
+    }
+  }
+
+  if (!token) {
+    log('No token available. Running in standalone DSP-only mode.');
     attachWorkletHandler(dspNode, null);
     return;
   }
@@ -122,7 +141,7 @@ async function startZeplin() {
   });
 
   try {
-    await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN);
+    await room.connect(serverUrl, token);
   } catch (err) {
     logErr('LiveKit connection failed:', err);
     return;

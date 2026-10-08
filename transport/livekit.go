@@ -274,6 +274,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 			},
 			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				log.Printf("Track unsubscribed from %s", rp.Identity())
+				if orch != nil {
+					orch.CloseSession(rp.Identity())
+				}
 			},
 		},
 		OnDisconnected: func() {

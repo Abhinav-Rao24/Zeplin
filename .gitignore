@@ -1,2 +1,5 @@
 .env
 *.exe
+*.db*
+frontend/.next/
+frontend/node_modules/

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zeplin — Guitar Co-Pilot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+      gap: 1.5rem;
+    }
+    h1 { font-size: 1.6rem; color: #7dd3fc; letter-spacing: 0.05em; }
+    .subtitle { font-size: 0.875rem; color: #64748b; }
+
+    /* Status bar */
+    #status-bar {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      background: #1e2330;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #ef4444;
+      display: inline-block;
+    }
+    .dot.connected { background: #22c55e; }
+
+    /* Chord display */
+    #chord-display {
+      display: flex;
+      gap: 2rem;
+      align-items: stretch;
+    }
+    .card {
+      background: #1e2330;
+      border-radius: 12px;
+      padding: 1.2rem 2rem;
+      text-align: center;
+      min-width: 160px;
+    }
+    .card-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #64748b;
+      margin-bottom: 0.4rem;
+    }
+    .chord-name {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #f1f5f9;
+    }
+    #detected-chord .chord-name { color: #7dd3fc; }
+    #confidence-bar {
+      height: 6px;
+      border-radius: 3px;
+      background: #2d3748;
+      margin-top: 0.5rem;
+      overflow: hidden;
+    }
+    #confidence-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, #7dd3fc, #22c55e);
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+
+    /* Streak counter */
+    #streak-display {
+      display: flex;
+      gap: 0.4rem;
+    }
+    .streak-dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #2d3748;
+      border: 2px solid #4a5568;
+      transition: background 0.15s;
+    }
+    .streak-dot.filled { background: #22c55e; border-color: #22c55e; }
+
+    /* Feedback text */
+    #feedback-text {
+      background: #1e2330;
+      border-left: 3px solid #7dd3fc;
+      padding: 0.8rem 1.2rem;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.95rem;
+      min-height: 2.5rem;
+      width: 100%;
+      max-width: 600px;
+      color: #cbd5e1;
+      font-style: italic;
+    }
+
+    /* Placeholder fretboard (Phase 4 replaces this) */
+    #fretboard-placeholder {
+      background: #1e2330;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 600px;
+      text-align: center;
+      color: #4a5568;
+      font-size: 0.85rem;
+      border: 1px dashed #2d3748;
+    }
+
+    /* Log panel (diagnostic output) */
+    #log-panel {
+      background: #0a0c12;
+      border-radius: 8px;
+      padding: 1rem;
+      width: 100%;
+      max-width: 700px;
+      height: 180px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.72rem;
+      color: #6b7280;
+      border: 1px solid #1e2330;
+    }
+    #log-panel div { line-height: 1.6; }
+    #log-panel div:last-child { color: #94a3b8; }
+
+    /* Start button */
+    #start-btn {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 0.75rem 2.5rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    #start-btn:hover { background: #2563eb; }
+    #start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>🎸 Zeplin Guitar Co-Pilot</h1>
+  <p class="subtitle">Real-time AI guitar teacher — Phase 1 DSP test harness</p>
+
+  <!-- Connection status -->
+  <div id="status-bar">
+    <span class="dot" id="lk-dot"></span>
+    <span id="lk-status">Disconnected</span>
+    <span style="color:#4a5568">|</span>
+    <span id="tuning-status">Tuning: uncalibrated</span>
+  </div>
+
+  <!-- Chord detection display -->
+  <div id="chord-display">
+    <div class="card" id="target-chord">
+      <div class="card-label">Target</div>
+      <div class="chord-name" id="target-chord-name">—</div>
+    </div>
+
+    <div class="card" id="detected-chord">
+      <div class="card-label">Detected</div>
+      <div class="chord-name" id="detected-chord-name">—</div>
+      <div id="confidence-bar"><div id="confidence-fill"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Streak</div>
+      <div id="streak-display">
+        <div class="streak-dot" id="s0"></div>
+        <div class="streak-dot" id="s1"></div>
+        <div class="streak-dot" id="s2"></div>
+        <div class="streak-dot" id="s3"></div>
+        <div class="streak-dot" id="s4"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feedback text -->
+  <div id="feedback-text">Waiting for lesson to start...</div>
+
+  <!-- Fretboard placeholder (Phase 4) -->
+  <div id="fretboard-placeholder">
+    🎸 Interactive fretboard diagram — coming in Phase 4
+  </div>
+
+  <!-- Start button -->
+  <button id="start-btn">Connect &amp; Start Lesson</button>
+
+  <!-- Diagnostic log -->
+  <div id="log-panel"></div>
+
+  <!-- LiveKit JS SDK (CDN — replace with local bundle for production) -->
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+
+  <!-- Zeplin client glue -->
+  <script src="/main.js"></script>
+
+  <!-- UI update loop: polls window.ZeplinState every 200ms -->
+  <script>
+    // Inject LiveKit token if served with it baked into the page
+    // (For production, the Go server will template this value)
+    // window.ZEPLIN_LIVEKIT_URL   = 'ws://localhost:7880';
+    // window.ZEPLIN_LIVEKIT_TOKEN = '<token>';
+
+    setInterval(() => {
+      const state = window.ZeplinState;
+      if (!state) return;
+
+      // Connection dot
+      const dot = document.getElementById('lk-dot');
+      const lkStatus = document.getElementById('lk-status');
+      if (state.connected) {
+        dot.classList.add('connected');
+        lkStatus.textContent = 'LiveKit connected';
+      } else {
+        dot.classList.remove('connected');
+        lkStatus.textContent = 'Disconnected';
+      }
+
+      // Tuning
+      document.getElementById('tuning-status').textContent =
+        state.calibrated ? 'Tuning: calibrated ✓' : 'Tuning: uncalibrated';
+
+      // Chord names
+      document.getElementById('target-chord-name').textContent =
+        state.targetChord ? state.targetChord.replace('_', ' ') : '—';
+      document.getElementById('detected-chord-name').textContent =
+        state.detectedChord ? state.detectedChord.replace('_', ' ') : '—';
+
+      // Confidence bar
+      document.getElementById('confidence-fill').style.width =
+        Math.round((state.confidence || 0) * 100) + '%';
+
+      // Streak dots
+      for (let i = 0; i < 5; i++) {
+        const dot = document.getElementById('s' + i);
+        if (dot) {
+          dot.classList.toggle('filled', i < state.streak);
+        }
+      }
+
+      // Feedback text
+      if (state.lastFeedback) {
+        document.getElementById('feedback-text').textContent = state.lastFeedback;
+      }
+    }, 200);
+  </script>
+</body>
+</html>

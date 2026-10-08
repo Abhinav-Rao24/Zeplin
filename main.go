@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"embed"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
@@ -9,49 +11,77 @@ import (
 
 	"github.com/Abhinav-Rao24/Zeplin/brain"
 	"github.com/Abhinav-Rao24/Zeplin/config"
+	"github.com/Abhinav-Rao24/Zeplin/lessons"
 	"github.com/Abhinav-Rao24/Zeplin/memory"
 	"github.com/Abhinav-Rao24/Zeplin/transport"
 	"github.com/Abhinav-Rao24/Zeplin/tts"
 )
 
+//go:embed client
+var clientFS embed.FS
+
 func main() {
-	log.Println("Starting Zeplin Voice AI Framework...")
+	log.Println("Starting Zeplin Guitar Co-Pilot...")
 
-	// Initialize configuration
+	// ── Configuration ─────────────────────────────────────────────────────
 	cfg := config.Load()
-	log.Println("Configuration loaded successfully.")
+	log.Println("Configuration loaded.")
 
-	// Initialize thread-safe memory store
+	// ── In-Memory Session Store ────────────────────────────────────────────
 	memStore := memory.NewInMemoryStore()
-	log.Println("Session Memory Store initialized.")
+	log.Println("Session memory store initialized.")
 
-	// Initialize Groq brain layer
+	// ── Groq Brain (guitar coach persona) ─────────────────────────────────
 	ctx := context.Background()
 	brainEngine, err := brain.NewBrain(ctx, cfg.GroqAPIKey, memStore)
 	if err != nil {
 		log.Fatalf("Failed to initialize Groq brain: %v", err)
 	}
-	log.Println("Groq Brain and Llama 3.1 node initialized successfully.")
+	log.Println("Guitar coach brain (Groq/Llama) initialized.")
 
-	// Initialize Long-lived Deepgram TTS streaming engine
+	// ── Deepgram TTS Streaming Engine ─────────────────────────────────────
 	ttsEngine, err := tts.NewDeepgramStreamTTS(cfg.DeepgramAPIKey)
 	if err != nil {
 		log.Fatalf("Failed to initialize Deepgram TTS: %v", err)
 	}
 	defer ttsEngine.Close()
+	log.Println("Deepgram TTS engine initialized.")
 
-	// Connect to LiveKit Room and hook up the STT Engine and Eino Brain
-	room, err := transport.ConnectLiveKit(cfg.LivekitURL, cfg.LivekitAPIKey, cfg.LivekitAPISecret, cfg.DeepgramAPIKey, brainEngine, ttsEngine)
+	// ── Lesson Orchestrator ────────────────────────────────────────────────
+	// The orchestrator is constructed without a publisher first; the publisher
+	// is injected after the LiveKit room is connected (so it can hold a room ref).
+	orchestrator := lessons.NewOrchestrator(brainEngine, ttsEngine, nil)
+	log.Println("Lesson orchestrator initialized.")
+
+	// ── HTTP Client Server (embed.FS → localhost:8080) ─────────────────────
+	// Sub into the client/ directory so the server root maps to client/index.html
+	subFS, err := fs.Sub(clientFS, "client")
+	if err != nil {
+		log.Fatalf("Failed to sub into client FS: %v", err)
+	}
+	transport.ServeClient(cfg.HTTPPort, subFS)
+	log.Printf("Client available at http://localhost:%s", cfg.HTTPPort)
+
+	// ── LiveKit Room Connection ────────────────────────────────────────────
+	room, err := transport.ConnectLiveKit(
+		cfg.LivekitURL,
+		cfg.LivekitAPIKey,
+		cfg.LivekitAPISecret,
+		cfg.DeepgramAPIKey,
+		brainEngine,
+		ttsEngine,
+		orchestrator,
+	)
 	if err != nil {
 		log.Fatalf("Failed to connect to LiveKit: %v", err)
 	}
 	defer room.Disconnect()
 
-	// Keep the application running
-	log.Println("Voice Ingestion & AI Brain Layer is now active. Waiting for participants...")
+	// ── Signal Handling ────────────────────────────────────────────────────
+	log.Println("Zeplin Guitar Co-Pilot is active. Open http://localhost:" + cfg.HTTPPort + " in your browser.")
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	log.Println("Shutting down Zeplin Voice AI Framework...")
+	log.Println("Shutting down Zeplin Guitar Co-Pilot...")
 }

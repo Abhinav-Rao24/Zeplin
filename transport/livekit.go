@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Abhinav-Rao24/Zeplin/brain"
+	"github.com/Abhinav-Rao24/Zeplin/dsp"
+	"github.com/Abhinav-Rao24/Zeplin/lessons"
 	"github.com/Abhinav-Rao24/Zeplin/stt"
 	"github.com/Abhinav-Rao24/Zeplin/tts"
 	"github.com/aflyingHusky/go-webrtcvad"
@@ -44,8 +46,13 @@ func echoOverlapRatio(candidate, reference string) float64 {
 
 // ConnectLiveKit establishes a connection to a LiveKit room, hooks up the STT writer per
 // participant, and publishes the agent's outbound voice track with Deepgram TTS streaming.
-func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance *brain.Brain, ttsEngine *tts.DeepgramStreamTTS) (*lksdk.Room, error) {
+func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance *brain.Brain, ttsEngine *tts.DeepgramStreamTTS, orchestrators ...*lessons.Orchestrator) (*lksdk.Room, error) {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var orch *lessons.Orchestrator
+	if len(orchestrators) > 0 {
+		orch = orchestrators[0]
+	}
 
 	// interruptChan signals the pacing loop to drain the TTS audio queue during a barge-in.
 	interruptChan := make(chan struct{}, 1)
@@ -136,8 +143,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							time.Sleep(60 * time.Millisecond)
 							ttsEngine.StartNewTurn()
 
-							if err := brainInstance.ProcessTurn(context.Background(), sessionID, transcript); err != nil {
-								log.Printf("Error processing turn for session %s: %v", sessionID, err)
+							if orch != nil {
+								orch.HandleSpeech(context.Background(), sessionID, transcript)
+							} else {
+								if err := brainInstance.ProcessTurn(context.Background(), sessionID, transcript); err != nil {
+									log.Printf("Error processing turn for session %s: %v", sessionID, err)
+								}
 							}
 
 							// If ProcessTurn finished without producing any audio (e.g., error
@@ -242,11 +253,17 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								if err != nil {
 									log.Printf("VAD process error: %v", err)
 								} else if activeVoice {
+									if orch != nil {
+										orch.SetSpeechActive(sessionID, true)
+									}
 									consecutivePositive++
 									if consecutivePositive >= vadThreshold {
 										triggerInterrupt()
 									}
 								} else {
+									if orch != nil && consecutivePositive > 0 {
+										orch.SetSpeechActive(sessionID, false)
+									}
 									consecutivePositive = 0
 								}
 								vadBuffer = vadBuffer[320:]
@@ -263,6 +280,10 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 			log.Println("Disconnected from LiveKit room. Stopping outbound TTS stream.")
 			cancel()
 		},
+	}
+
+	if orch != nil {
+		AttachDataChannelHandler(roomCB, orch)
 	}
 
 	roomName := strings.TrimSpace(os.Getenv("LIVEKIT_ROOM_NAME"))
@@ -282,6 +303,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 	}
 
 	log.Printf("Connected to LiveKit room %s", room.Name())
+
+	if orch != nil {
+		orch.SetPublisher(func(update dsp.UIStateUpdate) {
+			PublishDataChannelUpdate(room, update)
+		})
+	}
 
 	// Initialize the outbound audio track (PCMU / μ-law at 8 kHz mono).
 	capability := webrtc.RTPCodecCapability{

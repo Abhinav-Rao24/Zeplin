@@ -1,0 +1,333 @@
+package lessons
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Abhinav-Rao24/Zeplin/brain"
+	"github.com/Abhinav-Rao24/Zeplin/dsp"
+	"github.com/Abhinav-Rao24/Zeplin/tts"
+)
+
+// FeedbackPublisher is a function that sends a UI state update to the
+// browser client over the LiveKit DataChannel. Injected at construction.
+type FeedbackPublisher func(update dsp.UIStateUpdate)
+
+// Orchestrator is the central pedagogical coordinator. It receives two
+// types of input:
+//   - HandleChordEvent: structured DSP telemetry from the browser AudioWorklet
+//   - HandleSpeech: finalized STT transcripts from the student
+//
+// It emits spoken feedback via the TTS engine and visual state via the
+// DataChannel publisher. The architecture is deliberately rule-based for
+// chord evaluation (sub-100ms response, no LLM call per strum) and
+// LLM-backed only for conversational student questions.
+type Orchestrator struct {
+	brain     *brain.Brain
+	tts       *tts.DeepgramStreamTTS
+	publisher FeedbackPublisher
+
+	mu       sync.Mutex
+	sessions map[string]*LessonSession // keyed by participant identity
+
+	// Feedback debounce: avoids repeating the same line on every strum
+	lastFeedbackAt   time.Time
+	lastFeedbackText string
+	feedbackCooldown time.Duration
+}
+
+// NewOrchestrator creates a new Orchestrator.
+func NewOrchestrator(b *brain.Brain, t *tts.DeepgramStreamTTS, pub FeedbackPublisher) *Orchestrator {
+	return &Orchestrator{
+		brain:            b,
+		tts:              t,
+		publisher:        pub,
+		sessions:         make(map[string]*LessonSession),
+		feedbackCooldown: 1500 * time.Millisecond,
+	}
+}
+
+// SetPublisher injects or updates the FeedbackPublisher after room initialization.
+func (o *Orchestrator) SetPublisher(pub FeedbackPublisher) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.publisher = pub
+}
+
+// GetOrCreateSession returns the LessonSession for a participant, creating
+// one on first contact.
+func (o *Orchestrator) GetOrCreateSession(sessionID string) *LessonSession {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if sess, ok := o.sessions[sessionID]; ok {
+		return sess
+	}
+	sess := NewLessonSession(sessionID, sessionID)
+	o.sessions[sessionID] = sess
+	log.Printf("[Orchestrator] New lesson session started for participant: %s", sessionID)
+	return sess
+}
+
+// SetSpeechActive sets the VAD gate for chord suppression.
+// While speech is active, chord events are silently dropped to prevent
+// vocal formants from polluting the chromagram analysis.
+func (o *Orchestrator) SetSpeechActive(sessionID string, active bool) {
+	sess := o.GetOrCreateSession(sessionID)
+	sess.mu.Lock()
+	sess.SpeechActive = active
+	sess.mu.Unlock()
+}
+
+// ── Chord Event Handler ────────────────────────────────────────────────────
+
+// HandleChordEvent processes a confirmed chord detection from the browser DSP engine.
+// This runs on the DataChannel receive goroutine and must return promptly.
+func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
+	sess := o.GetOrCreateSession(sessionID)
+
+	// ── VAD Gate ──────────────────────────────────────────────────────────
+	sess.mu.Lock()
+	speechActive := sess.SpeechActive
+	sess.mu.Unlock()
+	if speechActive {
+		log.Printf("[Orchestrator] Chord event suppressed (speech active): %s", evt.DetectedChord)
+		return
+	}
+
+	target := sess.ActiveTarget()
+	targetDef := ChordByName(target)
+
+	log.Printf("[Orchestrator] Chord: detected=%q target=%q bass=%s conf=%.2f inv=%v",
+		evt.DetectedChord, target, evt.BassNote, evt.Confidence, evt.Inversion)
+
+	// ── Case 1: Correct chord, clean voicing ─────────────────────────────
+	mutedIssues := findMutedIssues(evt, targetDef)
+	if evt.DetectedChord == target && !evt.Inversion && len(mutedIssues) == 0 {
+		streak := sess.IncrStreak()
+		step := sess.CurrentStep
+
+		if streak >= step.RepsToAdvance {
+			o.onExerciseComplete(sess, evt)
+		} else {
+			// Sparse positive reinforcement — not every strum, only key moments.
+			if streak == 1 {
+				o.speakCooled("Good. Hold it steady.")
+			} else if streak == step.RepsToAdvance-1 {
+				o.speakCooled("One more.")
+			}
+			o.publishState(sess, evt, "")
+		}
+		return
+	}
+
+	// ── Case 2: Correct chord, wrong bass (inversion / stray open string) ─
+	if evt.DetectedChord == target && evt.Inversion {
+		sess.RecordMistake(MistakeInversion)
+		sess.ResetStreak()
+		msg := fmt.Sprintf("Watch your %s string — it's ringing out. Mute it.", evt.BassNote)
+		o.speak(msg)
+		o.publishState(sess, evt, msg)
+		return
+	}
+
+	// ── Case 3: Correct chord name, but one string muted/buzzing ─────────
+	if evt.DetectedChord == target && len(mutedIssues) > 0 {
+		sess.RecordMistake(MistakeMutedString)
+		sess.ResetStreak()
+		stringName := stringIndexToName(mutedIssues[0])
+		msg := fmt.Sprintf("Your %s string is muted. Arch your fretting finger.", stringName)
+		o.speak(msg)
+		o.publishState(sess, evt, msg)
+		return
+	}
+
+	// ── Case 4: Wrong chord entirely ──────────────────────────────────────
+	sess.RecordMistake(MistakeWrongChord)
+	sess.ResetStreak()
+
+	targetDisplay := displayName(target)
+	detectedDisplay := displayName(evt.DetectedChord)
+	mistakeCount := sess.MistakeLog[MistakeWrongChord]
+
+	var msg string
+	switch {
+	case mistakeCount > 5:
+		msg = fmt.Sprintf("Still not %s. Try placing your fingers one at a time, then strum.", targetDisplay)
+	case mistakeCount > 2:
+		msg = fmt.Sprintf("Check your shape — that was %s, not %s.", detectedDisplay, targetDisplay)
+	default:
+		msg = fmt.Sprintf("That sounded like %s. Aim for %s.", detectedDisplay, targetDisplay)
+	}
+	o.speak(msg)
+	o.publishState(sess, evt, msg)
+}
+
+// onExerciseComplete handles curriculum advancement when the streak target is reached.
+func (o *Orchestrator) onExerciseComplete(sess *LessonSession, evt dsp.ChordEvent) {
+	step := sess.CurrentStep
+
+	if step.Exercise == ExerciseTransition {
+		sess.FlipTransition()
+		newTarget := sess.ActiveTarget()
+		if def := ChordByName(newTarget); def != nil {
+			msg := fmt.Sprintf("Good. Now switch to %s.", def.DisplayName)
+			o.speak(msg)
+			o.publishState(sess, evt, msg)
+		}
+		return
+	}
+
+	// Advance to next curriculum step
+	advanced := sess.AdvanceStep()
+	if advanced {
+		nextDef := ChordByName(sess.CurrentStep.TargetChord)
+		if nextDef != nil {
+			msg := fmt.Sprintf("Excellent! Now let's learn %s.", nextDef.DisplayName)
+			o.speak(msg)
+			o.publishState(sess, evt, fmt.Sprintf("Next: %s", nextDef.DisplayName))
+		}
+	} else {
+		o.speak("You've completed all the beginner chords. Excellent work!")
+		o.publishState(sess, evt, "All done!")
+	}
+}
+
+// ── Speech Handler ─────────────────────────────────────────────────────────
+
+// HandleSpeech processes a finalized STT transcript. It enriches the
+// student's question with lesson context before routing to the LLM brain,
+// giving the brain factual grounding for its answer.
+func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, transcript string) {
+	sess := o.GetOrCreateSession(sessionID)
+
+	step := sess.CurrentStep
+	streak := sess.SuccessStreak
+	mistakes := sess.MistakeLog
+
+	// Build a structured context preamble for the brain
+	var lines []string
+	lines = append(lines, fmt.Sprintf("[Lesson] Exercise: %s", step.Name))
+	lines = append(lines, fmt.Sprintf("[Lesson] Target chord: %s", displayName(step.TargetChord)))
+	lines = append(lines, fmt.Sprintf("[Lesson] Success streak: %d of %d", streak, step.RepsToAdvance))
+	if len(mistakes) > 0 {
+		lines = append(lines, fmt.Sprintf("[Lesson] Recurring issues: %s", formatMistakes(mistakes)))
+	}
+	lines = append(lines, fmt.Sprintf("[Student says]: %s", transcript))
+
+	enriched := strings.Join(lines, "\n")
+	log.Printf("[Orchestrator] Routing speech to brain: %q", transcript)
+
+	if err := o.brain.ProcessTurn(ctx, sessionID, enriched); err != nil {
+		log.Printf("[Orchestrator] Brain error: %v", err)
+	}
+}
+
+// ── Tuning Calibration ─────────────────────────────────────────────────────
+
+// HandleTuningCalibration receives a single-string F0 measurement during
+// the session-start tuning check and evaluates deviation from A=440 Hz.
+func (o *Orchestrator) HandleTuningCalibration(sessionID string, evt dsp.TuningCalibrationEvent) {
+	sess := o.GetOrCreateSession(sessionID)
+
+	// Open low E string reference: E2 = 82.41 Hz in standard A=440 tuning.
+	const referenceE2Hz = 82.41
+	offsetCents := 1200 * math.Log2(evt.Hz/referenceE2Hz)
+
+	sess.mu.Lock()
+	sess.TuningOffsetCents = offsetCents
+	sess.TuningCalibrated = true
+	sess.mu.Unlock()
+
+	log.Printf("[Tuning] %s at %.1f Hz → offset %.1f cents", evt.Note, evt.Hz, offsetCents)
+
+	if math.Abs(offsetCents) > 20 {
+		direction := "flat"
+		if offsetCents > 0 {
+			direction = "sharp"
+		}
+		o.speak(fmt.Sprintf("Your guitar is about %.0f cents %s. Tune it before we start.", math.Abs(offsetCents), direction))
+	} else {
+		o.speak("Tuning looks good. Let's begin with E minor.")
+	}
+}
+
+// ── Internal Helpers ───────────────────────────────────────────────────────
+
+func (o *Orchestrator) speak(text string) {
+	log.Printf("[TTS] %q", text)
+	if o.tts == nil {
+		return
+	}
+	o.tts.Speak(text)
+}
+
+// speakCooled emits speech only if the feedback text differs from the last
+// utterance, or the cooldown period has elapsed.
+func (o *Orchestrator) speakCooled(text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if text == o.lastFeedbackText && time.Since(o.lastFeedbackAt) < o.feedbackCooldown {
+		return
+	}
+	o.lastFeedbackText = text
+	o.lastFeedbackAt = time.Now()
+	go o.speak(text) // non-blocking to avoid holding the mutex during TTS I/O
+}
+
+func (o *Orchestrator) publishState(sess *LessonSession, evt dsp.ChordEvent, feedback string) {
+	if o.publisher == nil {
+		return
+	}
+	update := dsp.UIStateUpdate{
+		Event:         "lesson_state_update",
+		TargetChord:   sess.CurrentStep.TargetChord,
+		CurrentStreak: sess.SuccessStreak,
+		FeedbackText:  feedback,
+		StringStatus:  make([]string, 6),
+	}
+	for i := range update.StringStatus {
+		update.StringStatus[i] = "ok"
+	}
+	o.publisher(update)
+}
+
+// findMutedIssues heuristically identifies muted string problems.
+// A chord matched correctly but with confidence < 0.78 suggests that at
+// least one string is muted or buzzing, reducing harmonic completeness.
+func findMutedIssues(evt dsp.ChordEvent, def *ChordDef) []int {
+	if def == nil {
+		return nil
+	}
+	if evt.Confidence < 0.78 {
+		return []int{1} // B string is the most common culprit for beginners
+	}
+	return nil
+}
+
+func stringIndexToName(idx int) string {
+	names := []string{"low E", "A", "D", "G", "B", "high e"}
+	if idx >= 0 && idx < len(names) {
+		return names[idx]
+	}
+	return "unknown"
+}
+
+func displayName(chordName string) string {
+	if def := ChordByName(chordName); def != nil {
+		return def.DisplayName
+	}
+	return strings.ReplaceAll(chordName, "_", " ")
+}
+
+func formatMistakes(m map[MistakeType]int) string {
+	parts := make([]string, 0, len(m))
+	for k, v := range m {
+		parts = append(parts, fmt.Sprintf("%s×%d", k, v))
+	}
+	return strings.Join(parts, ", ")
+}

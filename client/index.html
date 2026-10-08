@@ -3,262 +3,649 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zeplin — Guitar Co-Pilot</title>
+  <title>Zeplin — Real-Time Guitar Co-Pilot</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #0f1117;
-      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #0b0d13;
+      color: #f1f5f9;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 2rem;
-      gap: 1.5rem;
+      padding: 1.5rem 1rem;
+      gap: 1.25rem;
     }
-    h1 { font-size: 1.6rem; color: #7dd3fc; letter-spacing: 0.05em; }
-    .subtitle { font-size: 0.875rem; color: #64748b; }
 
-    /* Status bar */
+    header {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid #1e293b;
+    }
+    .brand-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #38bdf8;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    .brand-subtitle {
+      font-size: 0.8rem;
+      color: #64748b;
+      margin-top: 2px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .btn-secondary {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      padding: 0.45rem 0.9rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.2s;
+    }
+    .btn-secondary:hover {
+      background: #334155;
+      color: #f8fafc;
+    }
+
+    /* Status Bar */
     #status-bar {
       display: flex;
       gap: 1rem;
       align-items: center;
-      background: #1e2330;
-      padding: 0.6rem 1.2rem;
+      background: #131722;
+      border: 1px solid #1e293b;
+      padding: 0.5rem 1rem;
       border-radius: 8px;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
+      color: #94a3b8;
     }
     .dot {
-      width: 10px; height: 10px;
+      width: 8px; height: 8px;
       border-radius: 50%;
       background: #ef4444;
       display: inline-block;
+      transition: background 0.2s;
     }
-    .dot.connected { background: #22c55e; }
+    .dot.connected { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.4); }
 
-    /* Chord display */
-    #chord-display {
-      display: flex;
-      gap: 2rem;
-      align-items: stretch;
+    /* Studio Layout Grid */
+    .studio-container {
+      width: 100%;
+      max-width: 900px;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 1.25rem;
     }
+    @media (max-width: 800px) {
+      .studio-container { grid-template-columns: 1fr; }
+    }
+
+    /* Cards */
     .card {
-      background: #1e2330;
+      background: #131722;
+      border: 1px solid #1e293b;
       border-radius: 12px;
-      padding: 1.2rem 2rem;
-      text-align: center;
-      min-width: 160px;
+      padding: 1.25rem;
+      position: relative;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
     }
     .card-label {
-      font-size: 0.7rem;
+      font-size: 0.72rem;
       text-transform: uppercase;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.08em;
       color: #64748b;
-      margin-bottom: 0.4rem;
-    }
-    .chord-name {
-      font-size: 2rem;
       font-weight: 700;
-      color: #f1f5f9;
-    }
-    #detected-chord .chord-name { color: #7dd3fc; }
-    #confidence-bar {
-      height: 6px;
-      border-radius: 3px;
-      background: #2d3748;
-      margin-top: 0.5rem;
-      overflow: hidden;
-    }
-    #confidence-fill {
-      height: 100%;
-      border-radius: 3px;
-      background: linear-gradient(90deg, #7dd3fc, #22c55e);
-      width: 0%;
-      transition: width 0.2s ease;
     }
 
-    /* Streak counter */
-    #streak-display {
+    /* Target Chord & Fretboard */
+    .fretboard-card {
       display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .target-title-bar {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      width: 100%;
+      margin-bottom: 0.5rem;
+    }
+    .target-chord-name {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: #f8fafc;
+    }
+    .target-badge {
+      font-size: 0.72rem;
+      background: #0284c7;
+      color: white;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    #fretboard-container {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      margin: 0.5rem 0;
+    }
+    .fretboard-svg {
+      width: 100%;
+      max-width: 360px;
+      height: auto;
+    }
+
+    /* Feedback Callout */
+    #feedback-box {
+      width: 100%;
+      background: #181f2f;
+      border-left: 3px solid #38bdf8;
+      border-radius: 0 8px 8px 0;
+      padding: 0.85rem 1rem;
+      font-size: 0.95rem;
+      color: #e2e8f0;
+      font-style: italic;
+      margin-top: 0.75rem;
+      min-height: 3rem;
+      display: flex;
+      align-items: center;
+    }
+
+    /* Streak Dots */
+    .streak-container {
+      display: flex;
+      align-items: center;
       gap: 0.4rem;
+      margin-left: auto;
     }
     .streak-dot {
       width: 12px; height: 12px;
       border-radius: 50%;
-      background: #2d3748;
-      border: 2px solid #4a5568;
-      transition: background 0.15s;
+      background: #1e293b;
+      border: 1.5px solid #334155;
+      transition: all 0.2s ease;
     }
-    .streak-dot.filled { background: #22c55e; border-color: #22c55e; }
+    .streak-dot.filled {
+      background: #22c55e;
+      border-color: #22c55e;
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+    }
 
-    /* Feedback text */
-    #feedback-text {
-      background: #1e2330;
-      border-left: 3px solid #7dd3fc;
-      padding: 0.8rem 1.2rem;
-      border-radius: 0 8px 8px 0;
-      font-size: 0.95rem;
-      min-height: 2.5rem;
+    /* Side Panel */
+    .side-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* Detected Chord Card */
+    #detected-chord {
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    #detected-chord.strum-pulse {
+      transform: scale(1.02);
+      border-color: #38bdf8;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+    }
+    .detected-name {
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: #38bdf8;
+      margin: 0.25rem 0;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-top: 0.5rem;
+    }
+
+    /* Confidence Meter */
+    .meter-track {
+      height: 6px;
+      background: #1e293b;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 0.4rem;
+    }
+    .meter-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #38bdf8, #22c55e);
+      border-radius: 3px;
+      transition: width 0.2s ease;
+    }
+
+    /* Tuner Widget Styles */
+    .tuner-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+    .tuner-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .tuner-title {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: #64748b;
+      letter-spacing: 0.08em;
+    }
+    .tuner-badge {
+      font-size: 0.68rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      background: #334155;
+      color: #94a3b8;
+    }
+    .tuner-badge.calibrated {
+      background: #14532d;
+      color: #4ade80;
+    }
+    .tuner-display {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-around;
+      padding: 0.4rem 0;
+    }
+    .tuner-note {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: #f8fafc;
+    }
+    .tuner-freq {
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+    .tuner-cents {
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+    .tuner-meter-track {
+      height: 10px;
+      background: #1e293b;
+      border-radius: 5px;
+      position: relative;
+      margin: 0.4rem 0;
+    }
+    .tuner-center-mark {
+      position: absolute;
+      left: 50%;
+      top: -2px;
+      bottom: -2px;
+      width: 2px;
+      background: #94a3b8;
+      transform: translateX(-50%);
+    }
+    .tuner-sweet-spot {
+      position: absolute;
+      left: 40%;
+      width: 20%;
+      top: 0;
+      bottom: 0;
+      background: rgba(34, 197, 94, 0.15);
+      border-radius: 3px;
+    }
+    .tuner-needle {
+      position: absolute;
+      top: -3px;
+      bottom: -3px;
+      width: 4px;
+      border-radius: 2px;
+      transform: translateX(-50%);
+      transition: left 0.15s ease, background-color 0.15s ease;
+    }
+    .tuner-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.65rem;
+      color: #64748b;
+    }
+    .tuner-labels .target-label {
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    /* Start / Connect Button */
+    #start-btn {
       width: 100%;
-      max-width: 600px;
-      color: #cbd5e1;
-      font-style: italic;
+      max-width: 900px;
+      background: #0284c7;
+      color: white;
+      border: none;
+      padding: 0.9rem 2rem;
+      border-radius: 10px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.5rem;
+      transition: background 0.2s, transform 0.1s;
     }
+    #start-btn:hover { background: #0369a1; }
+    #start-btn:active { transform: scale(0.99); }
+    #start-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-    /* Placeholder fretboard (Phase 4 replaces this) */
-    #fretboard-placeholder {
-      background: #1e2330;
-      border-radius: 12px;
-      padding: 2rem;
+    /* Diagnostic Console Log */
+    .console-card {
       width: 100%;
-      max-width: 600px;
-      text-align: center;
-      color: #4a5568;
-      font-size: 0.85rem;
-      border: 1px dashed #2d3748;
+      max-width: 900px;
+      background: #07090e;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
     }
-
-    /* Log panel (diagnostic output) */
+    .console-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: #64748b;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
     #log-panel {
-      background: #0a0c12;
-      border-radius: 8px;
-      padding: 1rem;
-      width: 100%;
-      max-width: 700px;
-      height: 180px;
+      height: 110px;
       overflow-y: auto;
       font-family: 'Cascadia Code', 'Fira Code', monospace;
       font-size: 0.72rem;
-      color: #6b7280;
-      border: 1px solid #1e2330;
+      color: #64748b;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
     }
-    #log-panel div { line-height: 1.6; }
-    #log-panel div:last-child { color: #94a3b8; }
+    #log-panel div:last-child { color: #38bdf8; font-weight: 600; }
 
-    /* Start button */
-    #start-btn {
-      background: #3b82f6;
-      color: white;
-      border: none;
-      padding: 0.75rem 2.5rem;
-      border-radius: 8px;
-      font-size: 1rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s, opacity 0.2s;
+    /* Stats Modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
     }
-    #start-btn:hover { background: #2563eb; }
-    #start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .modal-backdrop.visible { display: flex; }
+    .modal-box {
+      background: #131722;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      width: 90%;
+      max-width: 520px;
+      padding: 1.5rem;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.25rem;
+    }
+    .modal-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .btn-close {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      font-size: 1.2rem;
+      cursor: pointer;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.75rem;
+    }
+    .stat-box {
+      background: #181f2f;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 0.85rem;
+      text-align: center;
+    }
+    .stat-number {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: #38bdf8;
+    }
+    .stat-label {
+      font-size: 0.72rem;
+      color: #94a3b8;
+      text-transform: uppercase;
+      margin-top: 0.2rem;
+    }
+    .mistakes-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .mistake-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #181f2f;
+      padding: 0.6rem 0.85rem;
+      border-radius: 6px;
+      border-left: 3px solid #ef4444;
+      font-size: 0.85rem;
+    }
+    .mistake-type {
+      font-size: 0.72rem;
+      color: #f87171;
+      margin-left: 0.4rem;
+    }
+    .mistake-count {
+      font-weight: 800;
+      color: #ef4444;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
-  <h1>🎸 Zeplin Guitar Co-Pilot</h1>
-  <p class="subtitle">Real-time AI guitar teacher — Phase 1 DSP test harness</p>
-
-  <!-- Connection status -->
-  <div id="status-bar">
-    <span class="dot" id="lk-dot"></span>
-    <span id="lk-status">Disconnected</span>
-    <span style="color:#4a5568">|</span>
-    <span id="tuning-status">Tuning: uncalibrated</span>
-  </div>
-
-  <!-- Chord detection display -->
-  <div id="chord-display">
-    <div class="card" id="target-chord">
-      <div class="card-label">Target</div>
-      <div class="chord-name" id="target-chord-name">—</div>
+  <header>
+    <div>
+      <div class="brand-title">🎸 Zeplin Guitar Co-Pilot</div>
+      <div class="brand-subtitle">Real-Time AI Guitar Teacher &amp; Signal-First Music Companion</div>
     </div>
-
-    <div class="card" id="detected-chord">
-      <div class="card-label">Detected</div>
-      <div class="chord-name" id="detected-chord-name">—</div>
-      <div id="confidence-bar"><div id="confidence-fill"></div></div>
+    <div class="top-actions">
+      <div id="status-bar">
+        <span class="dot" id="lk-dot"></span>
+        <span id="lk-status">Disconnected</span>
+      </div>
+      <button class="btn-secondary" id="stats-btn">📊 Stats &amp; Mistakes</button>
     </div>
+  </header>
 
-    <div class="card">
-      <div class="card-label">Streak</div>
-      <div id="streak-display">
-        <div class="streak-dot" id="s0"></div>
-        <div class="streak-dot" id="s1"></div>
-        <div class="streak-dot" id="s2"></div>
-        <div class="streak-dot" id="s3"></div>
-        <div class="streak-dot" id="s4"></div>
+  <!-- Studio Cockpit Layout -->
+  <main class="studio-container">
+    <!-- Left: Target Chord & Fretboard -->
+    <div class="card fretboard-card">
+      <div class="target-title-bar">
+        <span class="card-label">Target Exercise</span>
+        <span class="target-badge" id="exercise-badge">Hold Chord</span>
+        <div class="streak-container">
+          <span style="font-size: 0.72rem; color: #64748b; font-weight: 700; margin-right: 0.25rem;">STREAK:</span>
+          <div class="streak-dot" id="s0"></div>
+          <div class="streak-dot" id="s1"></div>
+          <div class="streak-dot" id="s2"></div>
+          <div class="streak-dot" id="s3"></div>
+          <div class="streak-dot" id="s4"></div>
+        </div>
+      </div>
+
+      <div style="width: 100%; display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.25rem;">
+        <span class="target-chord-name" id="target-chord-name">E Minor</span>
+        <span style="font-size: 0.85rem; color: #94a3b8;">(Open Triad)</span>
+      </div>
+
+      <!-- SVG Fretboard Component Mount -->
+      <div id="fretboard-container"></div>
+
+      <!-- Spoken Teacher Feedback Quote -->
+      <div id="feedback-box">
+        "Welcome to Zeplin. Press Connect &amp; Start Lesson to begin."
       </div>
     </div>
+
+    <!-- Right: Tuner & Detected Chord -->
+    <aside class="side-panel">
+      <!-- Live Tuner Gauge Component Mount -->
+      <div class="card" id="tuner-container"></div>
+
+      <!-- Live Detected Chord Card -->
+      <div class="card" id="detected-chord">
+        <div class="card-header">
+          <span class="card-label">Live Instrument Signal</span>
+          <span style="font-size: 0.75rem; color: #22c55e;" id="detected-status">Active</span>
+        </div>
+
+        <div style="text-align: center; padding: 0.5rem 0;">
+          <div class="card-label">Detected Chord</div>
+          <div class="detected-name" id="detected-chord-name">—</div>
+          <div class="meter-track">
+            <div class="meter-fill" id="confidence-fill"></div>
+          </div>
+        </div>
+
+        <div class="metric-row">
+          <span>Match Confidence</span>
+          <strong id="confidence-val">0%</strong>
+        </div>
+        <div class="metric-row">
+          <span>Bass Fundamental (F₀)</span>
+          <strong id="bass-val">—</strong>
+        </div>
+        <div class="metric-row">
+          <span>Voicing Type</span>
+          <strong id="inversion-val">Standard Root</strong>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Big Connect & Start Button -->
+  <button id="start-btn">
+    <span>Connect &amp; Start Lesson</span>
+  </button>
+
+  <!-- Live Diagnostic Console -->
+  <section class="console-card">
+    <div class="console-header">
+      <span>Event Stream Telemetry</span>
+      <span style="color: #475569;">48kHz PCM • LiveKit DataChannel</span>
+    </div>
+    <div id="log-panel"></div>
+  </section>
+
+  <!-- Practice History & Mistakes Modal -->
+  <div class="modal-backdrop" id="stats-modal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">📊 Practice Profile &amp; Tendencies</div>
+        <button class="btn-close" id="close-stats-btn">&times;</button>
+      </div>
+      <div id="stats-modal-body"></div>
+    </div>
   </div>
 
-  <!-- Feedback text -->
-  <div id="feedback-text">Waiting for lesson to start...</div>
-
-  <!-- Fretboard placeholder (Phase 4) -->
-  <div id="fretboard-placeholder">
-    🎸 Interactive fretboard diagram — coming in Phase 4
-  </div>
-
-  <!-- Start button -->
-  <button id="start-btn">Connect &amp; Start Lesson</button>
-
-  <!-- Diagnostic log -->
-  <div id="log-panel"></div>
-
-  <!-- LiveKit JS SDK (CDN — replace with local bundle for production) -->
+  <!-- LiveKit JS SDK (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 
-  <!-- Zeplin client glue -->
+  <!-- Zeplin Components & Client Glue -->
+  <script src="/fretboard.js"></script>
+  <script src="/tuner.js"></script>
   <script src="/main.js"></script>
 
-  <!-- UI update loop: polls window.ZeplinState every 200ms -->
+  <!-- UI State Polling Loop -->
   <script>
-    // Inject LiveKit token if served with it baked into the page
-    // (For production, the Go server will template this value)
-    // window.ZEPLIN_LIVEKIT_URL   = 'ws://localhost:7880';
-    // window.ZEPLIN_LIVEKIT_TOKEN = '<token>';
-
     setInterval(() => {
       const state = window.ZeplinState;
       if (!state) return;
 
-      // Connection dot
+      // 1. Connection Status
       const dot = document.getElementById('lk-dot');
       const lkStatus = document.getElementById('lk-status');
       if (state.connected) {
         dot.classList.add('connected');
-        lkStatus.textContent = 'LiveKit connected';
+        lkStatus.textContent = 'Classroom Active';
       } else {
         dot.classList.remove('connected');
         lkStatus.textContent = 'Disconnected';
       }
 
-      // Tuning
-      document.getElementById('tuning-status').textContent =
-        state.calibrated ? 'Tuning: calibrated ✓' : 'Tuning: uncalibrated';
+      // 2. Target Chord
+      if (state.targetChord) {
+        document.getElementById('target-chord-name').textContent =
+          state.targetChord.replace('_', ' ');
+      }
 
-      // Chord names
-      document.getElementById('target-chord-name').textContent =
-        state.targetChord ? state.targetChord.replace('_', ' ') : '—';
+      // 3. Streak Dots
+      for (let i = 0; i < 5; i++) {
+        const d = document.getElementById('s' + i);
+        if (d) d.classList.toggle('filled', i < state.streak);
+      }
+
+      // 4. Detected Chord & Confidence
       document.getElementById('detected-chord-name').textContent =
         state.detectedChord ? state.detectedChord.replace('_', ' ') : '—';
 
-      // Confidence bar
-      document.getElementById('confidence-fill').style.width =
-        Math.round((state.confidence || 0) * 100) + '%';
+      const confPercent = Math.round((state.confidence || 0) * 100);
+      document.getElementById('confidence-fill').style.width = confPercent + '%';
+      document.getElementById('confidence-val').textContent = confPercent + '%';
 
-      // Streak dots
-      for (let i = 0; i < 5; i++) {
-        const dot = document.getElementById('s' + i);
-        if (dot) {
-          dot.classList.toggle('filled', i < state.streak);
-        }
+      if (state.lastChordEvent) {
+        document.getElementById('bass-val').textContent =
+          `${state.lastChordEvent.bass_note} (${state.lastChordEvent.bass_hz}Hz)`;
+        document.getElementById('inversion-val').textContent =
+          state.lastChordEvent.inversion ? 'Inversion (Warning)' : 'Root Position';
+        document.getElementById('inversion-val').style.color =
+          state.lastChordEvent.inversion ? '#ef4444' : '#f8fafc';
       }
 
-      // Feedback text
+      // 5. Spoken Feedback
       if (state.lastFeedback) {
-        document.getElementById('feedback-text').textContent = state.lastFeedback;
+        document.getElementById('feedback-box').textContent = `"${state.lastFeedback}"`;
       }
-    }, 200);
+    }, 150);
   </script>
 </body>
 </html>

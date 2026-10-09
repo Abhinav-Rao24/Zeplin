@@ -20,12 +20,12 @@ export function useGuitarAudio() {
   const [state, setState] = useState<GuitarAudioState>({
     connected: false,
     agentState: 'disconnected',
-    targetChord: 'G_Major',
+    targetChord: 'E_Minor',
     detectedChord: '',
     confidence: 0,
     inversion: false,
     streak: 0,
-    feedbackText: 'Almost there. Your B string sounds muted, so lift your ring finger slightly and strum again.',
+    feedbackText: 'Welcome to Zeplin. Strum your guitar or talk to me!',
     userSpeech: '',
     stringStatus: ['ok', 'ok', 'ok', 'ok', 'ok', 'ok'],
   });
@@ -39,11 +39,12 @@ export function useGuitarAudio() {
   const startSession = useCallback(async () => {
     try {
       // 1. Acquire raw mic via getUserMedia so the track stays alive the whole time.
-      //    This is the single source of truth — we hand it to both DSP and LiveKit.
+      //    echoCancellation and noiseSuppression MUST be false: WebRTC AEC treats
+      //    acoustic resonance, prolonged guitar sustain, and chords played through speakers as echo.
       const micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,   // keep ON on Windows — disabling it drops AGC and kills VAD
+          echoCancellation: false,
+          noiseSuppression: false,
           autoGainControl: true,
           sampleRate: 48000,
         },
@@ -160,7 +161,7 @@ export function useGuitarAudio() {
             try {
               room.localParticipant.publishData(
                 new TextEncoder().encode(
-                  JSON.stringify({ event: 'student_connected', chord: 'G_Major' })
+                  JSON.stringify({ event: 'student_connected', chord: 'E_Minor' })
                 ),
                 { reliable: true }
               );

@@ -200,15 +200,6 @@ func (o *Orchestrator) SetSpeechActive(sessionID string, active bool) {
 func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 	sess := o.GetOrCreateSession(sessionID)
 
-	// ── VAD Gate ──────────────────────────────────────────────────────────
-	sess.mu.Lock()
-	speechActive := sess.SpeechActive
-	sess.mu.Unlock()
-	if speechActive {
-		log.Printf("[Orchestrator] Chord event suppressed (speech active): %s", evt.DetectedChord)
-		return
-	}
-
 	// ── Milestone 2: Instrument Strum Barge-In with Acoustic Echo Guard ────
 	// If Zeplin is speaking and a genuine physical strum arrives (energy > -28 dBFS and confidence >= 0.70):
 	// Instantly trigger barge-in to stop TTS speech and yield the floor to the instrument.
@@ -226,6 +217,7 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 	mutedIssues := findMutedIssues(evt, targetDef)
 
 	// ── Telemetry Recording (Milestone 3) ─────────────────────────────────
+	// Always record detected strum telemetry so recent strums are tracked accurately
 	var mutedNames []string
 	for _, idx := range mutedIssues {
 		mutedNames = append(mutedNames, stringIndexToName(idx))
@@ -241,6 +233,16 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 		MutedStrings:  mutedNames,
 		IsCorrect:     isClean,
 	})
+
+	// ── VAD Gate ──────────────────────────────────────────────────────────
+	// Suppress lesson progression and automated feedback while student voice is actively speaking
+	sess.mu.Lock()
+	speechActive := sess.SpeechActive
+	sess.mu.Unlock()
+	if speechActive {
+		log.Printf("[Orchestrator] Chord progression suppressed (speech active): %s", evt.DetectedChord)
+		return
+	}
 
 	// ── Case 1: Correct chord, clean voicing ─────────────────────────────
 	if evt.DetectedChord == target && !evt.Inversion && len(mutedIssues) == 0 {
@@ -391,16 +393,15 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 
 	// Build a structured context preamble for the brain
 	var lines []string
-	lines = append(lines, fmt.Sprintf("[Lesson] Exercise: %s", step.Name))
-	lines = append(lines, fmt.Sprintf("[Lesson] Target chord: %s", displayName(step.TargetChord)))
-	lines = append(lines, fmt.Sprintf("[Lesson] Success streak: %d of %d", streak, step.RepsToAdvance))
+	lines = append(lines, fmt.Sprintf("[Curriculum Reference]: Current exercise is %s (target %s, streak %d/%d). (Note: This is background curriculum reference only. Do NOT mention or push this target chord in greetings or general conversation unless the student specifically asks about their practice or chord lesson).",
+		step.Name, displayName(step.TargetChord), streak, step.RepsToAdvance))
 	if len(mistakes) > 0 {
-		lines = append(lines, fmt.Sprintf("[Lesson] Recurring issues: %s", formatMistakes(mistakes)))
+		lines = append(lines, fmt.Sprintf("[Lesson Recurring Issues]: %s", formatMistakes(mistakes)))
 	}
 	lines = append(lines, fmt.Sprintf("[Lesson Stats]: %s", sess.FormatPracticeSummary()))
 	if len(sess.RecentStrums) == 0 {
-		lines = append(lines, "[Recent Strum Telemetry]: No guitar strum detected yet.")
-		lines = append(lines, "[Tutor Instruction]: If the student asks what chord they just played or what chord that was, tell them directly that you didn't hear a strum, and invite them to strum clearly close to the mic. Do NOT guess or claim they played the lesson's target chord.")
+		lines = append(lines, "[Recent Strum Telemetry]: No guitar strum detected in this session yet.")
+		lines = append(lines, "[Tutor Instruction]: If the student asks what chord they just played or what chord that was, tell them directly that you didn't hear a strum, and invite them to strum clearly close to the mic. Do NOT guess or claim they played the curriculum target chord.")
 	} else {
 		lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
 		lastStrum := sess.RecentStrums[len(sess.RecentStrums)-1]

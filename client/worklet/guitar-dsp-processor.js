@@ -297,6 +297,7 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
 
     // Debounce: ignore chord events within 300ms of the last one
     this._samplesSinceLastChord = DEBOUNCE_SAMPLES; // start allowing
+    this._samplesSincePeriodicCheck = 0;
 
     // Tuning calibration
     this._tuningOffsetCents = 0;
@@ -352,6 +353,7 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
     if (this._filled < FFT_SIZE) return true;
 
     this._samplesSinceLastChord += n;
+    this._samplesSincePeriodicCheck += n;
 
     // Extract current analysis window from the ring buffer
     const win = this._extractWindow(FFT_SIZE);
@@ -385,10 +387,19 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
       this._samplesAfterOnset += n;
       if (this._samplesAfterOnset >= ONSET_GUARD_SAMPLES) {
         this._onsetPending = false;
+        this._samplesSincePeriodicCheck = 0;
         // Re-extract window at the guard-elapsed point for a clean analysis
         const analysisWin = this._extractWindow(FFT_SIZE);
         const analysisMag = magnitudeSpectrum(analysisWin);
         this._runAnalysis(analysisWin, analysisMag);
+      }
+    } else if (this._samplesSincePeriodicCheck >= Math.round(0.150 * SAMPLE_RATE)) {
+      // ── Continuous Periodic Evaluation (150ms cadence) ──────────────────
+      // Evaluates sustained resonance, YouTube chords, and fingerpicked chords
+      // even when there is no sharp percussive pick transient.
+      this._samplesSincePeriodicCheck = 0;
+      if (this._samplesSinceLastChord >= DEBOUNCE_SAMPLES) {
+        this._runAnalysis(win, mag);
       }
     }
 

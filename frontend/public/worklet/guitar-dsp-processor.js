@@ -30,12 +30,12 @@ const ONSET_GUARD_SAMPLES   = Math.round(0.040 * SAMPLE_RATE); // 40ms guard
 const DEBOUNCE_SAMPLES      = Math.round(0.300 * SAMPLE_RATE); // 300ms debounce
 
 // Gate thresholds (tunable via control messages from main thread)
-let RMS_THRESHOLD_DBFS      = -40;  // Gate 1
-let CENTROID_HZ_THRESHOLD   = 200;  // Gate 2
-let HARMONIC_RATIO_THRESHOLD = 0.25; // Gate 3
+let RMS_THRESHOLD_DBFS      = -45;  // Gate 1 (sensitive to acoustic guitars at 2-3ft)
+let CENTROID_HZ_THRESHOLD   = 180;  // Gate 2 (rejects sub-bass body thuds)
+let HARMONIC_RATIO_THRESHOLD = 0.35; // Gate 3 (polyphonic chromatic concentration)
 
 // Chord match
-const COSINE_MIN_CONFIDENCE = 0.65; // below this → ambiguous, discard
+const COSINE_MIN_CONFIDENCE = 0.50; // below this → ambiguous, discard
 
 // ─── Chord Templates ─────────────────────────────────────────────────────────
 // 12-bin binary chroma vectors. Pitch class indices: C=0 C#=1 D=2 D#=3 E=4
@@ -149,23 +149,15 @@ function computeSpectralCentroid(mag) {
   return totalMag > 1e-10 ? weightedSum / totalMag : 0;
 }
 
-// ─── Gate 3: Harmonic Ratio ───────────────────────────────────────────────
-// Fraction of total energy at harmonic partials of f0.
-// A sustained guitar chord has strong harmonic structure; noise does not.
-function computeHarmonicRatio(mag, f0Hz) {
-  if (f0Hz <= 0) return 0;
-  const binHz  = SAMPLE_RATE / FFT_SIZE;
-  const nyq    = mag.length;
-  let harmE = 0, totalE = 0;
-  for (let i = 0; i < nyq; i++) totalE += mag[i] * mag[i];
-  for (let h = 1; h * f0Hz < SAMPLE_RATE / 2; h++) {
-    const center = Math.round(h * f0Hz / binHz);
-    for (let d = -2; d <= 2; d++) {
-      const b = center + d;
-      if (b >= 0 && b < nyq) harmE += mag[b] * mag[b];
-    }
-  }
-  return totalE > 1e-10 ? harmE / totalE : 0;
+// ─── Gate 3: Polyphonic Chromatic Concentration & Harmonicity ─────────────
+// For polyphonic guitar chords (C, G, D, Am, Em), energy is distributed across
+// multiple fundamentals. We measure the concentration in the top 3 semitone bins
+// (a clean triad concentrates >= 35% of chromatic energy, whereas noise is flat ~25%).
+function computeHarmonicRatio(chroma) {
+  const sorted = Array.from(chroma).sort((a, b) => b - a);
+  const top3 = sorted[0] + sorted[1] + sorted[2];
+  const total = sorted.reduce((s, v) => s + v, 0);
+  return total > 1e-6 ? top3 / total : 0;
 }
 
 // ─── Low-Pass Filter (FIR moving average, ~350Hz cutoff) ─────────────────
@@ -248,17 +240,24 @@ function hzToPitchClass(hz) {
 function computeChroma(mag, tuningOffsetCents) {
   const chroma = new Float32Array(12);
   const binHz  = SAMPLE_RATE / FFT_SIZE;
-  const minBin = Math.ceil(60    / binHz);  // below guitar range
-  const maxBin = Math.floor(5500 / binHz);  // above which harmonics are noise
+  const minBin = Math.ceil(70   / binHz);  // ~70 Hz (low E string is 82.4 Hz)
+  const maxBin = Math.floor(1400 / binHz); // ~1400 Hz (core fundamentals & musical overtones)
+
+  // Calculate local noise floor in analysis band
+  let sumMag = 0;
+  for (let i = minBin; i < maxBin && i < mag.length; i++) sumMag += mag[i];
+  const noiseFloor = (sumMag / (maxBin - minBin)) * 0.6;
 
   for (let i = minBin; i < maxBin && i < mag.length; i++) {
+    const m = mag[i];
+    if (m < noiseFloor) continue; // suppress diffuse room noise floor
     const rawHz  = i * binHz;
     // Apply tuning offset: shift frequency as if the guitar were in standard pitch
     const adjHz  = rawHz * Math.pow(2, -tuningOffsetCents / 1200);
     if (adjHz <= 0) continue;
     const pc     = Math.round(12 * Math.log2(adjHz / F_C0)) % 12;
     const pcSafe = ((pc % 12) + 12) % 12;
-    chroma[pcSafe] += mag[i] * mag[i]; // energy accumulation
+    chroma[pcSafe] += m * m; // energy accumulation
   }
 
   // L2 normalize
@@ -331,9 +330,14 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
 
   // process() is called every 128 samples (~2.67ms at 48kHz).
   // Must return true to keep the processor alive.
-  process(inputs) {
+  process(inputs, outputs) {
     const channel = inputs[0]?.[0];
     if (!channel || channel.length === 0) return true;
+
+    const outChannel = outputs?.[0]?.[0];
+    if (outChannel) {
+      outChannel.set(channel);
+    }
 
     const n = channel.length; // typically 128
 
@@ -424,15 +428,14 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
     const lowPassed = lowPassFilter(win, 400);
     const bassHz    = yinPitch(lowPassed, 70, 420);
 
-    // ── Gate 3: Harmonic Ratio ────────────────────────────────────────────
-    const f0ForGate = bassHz > 0 ? bassHz : 200;
-    const harmRatio = computeHarmonicRatio(mag, f0ForGate);
-    // While agent speaks, require stronger harmonic resonance (0.45 vs 0.25) to reject vocal plosives
-    const effectiveHarmonicThreshold = this._isAgentSpeaking ? 0.45 : HARMONIC_RATIO_THRESHOLD;
-    if (harmRatio < effectiveHarmonicThreshold) return; // inharmonic noise burst / speech plosive
-
     // ── Chromagram ────────────────────────────────────────────────────────
     const chroma = computeChroma(mag, this._tuningOffsetCents);
+
+    // ── Gate 3: Polyphonic Chromatic Concentration ─────────────────────────
+    const harmRatio = computeHarmonicRatio(chroma);
+    // While agent speaks, require slightly stronger concentration to reject speech leakage
+    const effectiveHarmonicThreshold = this._isAgentSpeaking ? 0.45 : HARMONIC_RATIO_THRESHOLD;
+    if (harmRatio < effectiveHarmonicThreshold) return; // inharmonic noise burst / speech plosive
 
     // ── Chord Match ───────────────────────────────────────────────────────
     const { chord, confidence } = matchChord(chroma);

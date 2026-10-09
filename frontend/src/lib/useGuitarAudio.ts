@@ -63,19 +63,26 @@ export function useGuitarAudio() {
         await audioCtx.audioWorklet.addModule('/worklet/guitar-dsp-processor.js');
         const dspNode = new AudioWorkletNode(audioCtx, 'guitar-dsp-processor', {
           numberOfInputs: 1,
-          numberOfOutputs: 0,
+          numberOfOutputs: 1,
           channelCount: 1,
         });
         dspNodeRef.current = dspNode;
 
         const source = audioCtx.createMediaStreamSource(micStream);
+        // Connect through a zero-gain node to destination so Chrome's audio engine
+        // continuously pulls processing quantums through the worklet
+        const silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0;
         source.connect(dspNode);
+        dspNode.connect(silentGain);
+        silentGain.connect(audioCtx.destination);
 
         const lastSentRef = { chord: '', time: 0 };
 
         dspNode.port.onmessage = (e) => {
           const msg = e.data;
           if (msg.event === 'chord_detected') {
+            console.log('[Guitar DSP] Chord detected:', msg.detected_chord, 'Confidence:', msg.confidence, 'Bass:', msg.bass_note);
             setState((prev) => ({
               ...prev,
               detectedChord: msg.detected_chord,
@@ -86,10 +93,10 @@ export function useGuitarAudio() {
             // ── DataChannel Throttling ──────────────────────────────────────────
             // Avoid saturating WebRTC DataChannel: only dispatch if either:
             // 1. The detected chord changed, OR
-            // 2. At least 400ms have elapsed since the last transmission
+            // 2. At least 250ms have elapsed since the last transmission
             const now = Date.now();
             const chordChanged = msg.detected_chord !== lastSentRef.chord;
-            const timeElapsed = now - lastSentRef.time >= 400;
+            const timeElapsed = now - lastSentRef.time >= 250;
 
             if ((chordChanged || timeElapsed) && roomRef.current && roomRef.current.state === LiveKit.ConnectionState.Connected) {
               lastSentRef.chord = msg.detected_chord;
@@ -99,6 +106,7 @@ export function useGuitarAudio() {
                   new TextEncoder().encode(JSON.stringify(msg)),
                   { reliable: true }
                 );
+                console.log('[DataChannel] Dispatched chord to Go core:', msg.detected_chord);
               } catch (err) {
                 console.error('DataChannel publish failed:', err);
               }

@@ -306,7 +306,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 									if consecutivePositive == 1 {
 										log.Printf("[VAD] Voice detected from %s (RMS: %d, speaking: %t)", sessionID, rms, isSpeaking)
 									}
-									if orch != nil {
+									// Require sustained vocal energy (>= 3 frames / 60ms) before flagging speech active,
+									// preventing brief guitar pick transients from prematurely suppressing chord detection.
+									if orch != nil && consecutivePositive >= 3 {
 										orch.SetSpeechActive(sessionID, true)
 									}
 

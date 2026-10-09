@@ -398,7 +398,16 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 		lines = append(lines, fmt.Sprintf("[Lesson] Recurring issues: %s", formatMistakes(mistakes)))
 	}
 	lines = append(lines, fmt.Sprintf("[Lesson Stats]: %s", sess.FormatPracticeSummary()))
-	lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
+	if len(sess.RecentStrums) == 0 {
+		lines = append(lines, "[Recent Strum Telemetry]: No guitar strum detected yet.")
+		lines = append(lines, "[Tutor Instruction]: If the student asks what chord they just played or what chord that was, tell them directly that you didn't hear a strum, and invite them to strum clearly close to the mic. Do NOT guess or claim they played the lesson's target chord.")
+	} else {
+		lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
+		lastStrum := sess.RecentStrums[len(sess.RecentStrums)-1]
+		lines = append(lines, fmt.Sprintf("[Most Recent Strum Fact]: Detected as %s (confidence %.0f%%, bass %s)",
+			displayName(lastStrum.DetectedChord), lastStrum.Confidence*100, lastStrum.BassNote))
+		lines = append(lines, "[Tutor Instruction]: If the student asks what chord they played, answer using [Most Recent Strum Fact].")
+	}
 	lines = append(lines, fmt.Sprintf("[Student says]: %s", transcript))
 
 	enriched := strings.Join(lines, "\n")

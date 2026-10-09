@@ -19,7 +19,6 @@ import (
 	"github.com/pion/opus"
 	"github.com/pion/webrtc/v4"
 	pionmedia "github.com/pion/webrtc/v4/pkg/media"
-	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
 // echoOverlapRatio computes the fraction of words in candidate that appear in reference.
@@ -165,43 +164,32 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						return
 					}
 
-					// Wrap the STT writer (Deepgram) with an OGG writer and stream Opus RTP packets.
-					ogg, err := oggwriter.NewWith(sttEngine, 48000, 2)
+					// Initialize Opus decoder (48 kHz mono) matching browser microphone.
+					dec, err := opus.NewDecoderWithOutput(48000, 1)
 					if err != nil {
-						log.Printf("Error creating OGG writer: %v", err)
+						log.Printf("Error creating Opus decoder: %v", err)
 						sttEngine.Close()
 						return
 					}
 
-					log.Println("Successfully attached OGG writer to incoming track")
+					// Initialize local WebRTC VAD in Mode 2 (sensitive, balanced).
+					vad, err := webrtcvad.New()
+					if err != nil {
+						log.Printf("Error creating local VAD: %v", err)
+						sttEngine.Close()
+						return
+					}
+					if err := vad.SetMode(2); err != nil {
+						log.Printf("Error setting VAD mode: %v", err)
+					}
 
-					// RTP read loop: forwards audio to Deepgram STT and runs local WebRTC VAD.
+					pcm48Buf := make([]int16, 5760) // up to 120ms at 48kHz mono
+					var vadBuffer []byte
+					consecutivePositive := 0
+
+					// RTP read loop: decodes Opus → sends 16kHz PCM to Deepgram STT and WebRTC VAD.
 					go func() {
-						defer ogg.Close()
 						defer sttEngine.Close()
-
-						// Initialize local WebRTC VAD in aggressive mode (3) to
-						// filter background noise and room tones.
-						vad, err := webrtcvad.New()
-						if err != nil {
-							log.Printf("Error creating local VAD: %v", err)
-							return
-						}
-						if err := vad.SetMode(3); err != nil {
-							log.Printf("Error setting VAD mode: %v", err)
-							return
-						}
-
-						// Initialize Opus decoder (48 kHz, stereo) for PCM conversion.
-						dec, err := opus.NewDecoderWithOutput(48000, 2)
-						if err != nil {
-							log.Printf("Error creating Opus decoder: %v", err)
-							return
-						}
-
-						pcmBuf := make([]int16, 11520) // max Opus frame = 120 ms at 48 kHz stereo
-						var vadBuffer []byte
-						consecutivePositive := 0
 
 						for {
 							rtpPacket, _, err := track.ReadRTP()
@@ -210,53 +198,54 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								return
 							}
 
-							// 1. Forward to Deepgram STT via OGG container.
-							if err := ogg.WriteRTP(rtpPacket); err != nil {
-								log.Printf("Error writing RTP to OGG container: %v", err)
-								return
-							}
-
-							// 2. Decode Opus payload to raw signed-16 PCM.
 							if len(rtpPacket.Payload) == 0 {
 								continue
 							}
-							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcmBuf)
+
+							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcm48Buf)
 							if err != nil {
 								continue
 							}
 
-							// 3. Downmix stereo → mono and decimate 6:1 (48 kHz → 8 kHz).
-							for i := 0; i < sampleCount; i += 6 {
-								left := pcmBuf[2*i]
-								right := pcmBuf[2*i+1]
-								mono := int16((int32(left) + int32(right)) / 2)
-								vadBuffer = append(vadBuffer, byte(mono&0xff), byte(mono>>8))
+							// Downsample 48kHz mono → 16kHz mono (decimate by 3 with 3-sample average)
+							outSamples := sampleCount / 3
+							if outSamples == 0 {
+								continue
+							}
+							pcm16Bytes := make([]byte, outSamples*2)
+							for i := 0; i+2 < sampleCount; i += 3 {
+								avg := int16((int32(pcm48Buf[i]) + int32(pcm48Buf[i+1]) + int32(pcm48Buf[i+2])) / 3)
+								idx := (i / 3) * 2
+								pcm16Bytes[idx] = byte(avg & 0xff)
+								pcm16Bytes[idx+1] = byte(avg >> 8)
 							}
 
-							// 4. Feed exact 320-byte (20 ms) chunks to WebRTC VAD.
-							for len(vadBuffer) >= 320 {
-								chunk := vadBuffer[:320]
+							// 1. Forward raw 16kHz signed-16 PCM directly to Deepgram STT
+							if _, err := sttEngine.Write(pcm16Bytes); err != nil {
+								log.Printf("Error writing PCM to Deepgram: %v", err)
+							}
 
-								// ── Dual-Layer Echo Mitigation ────────────────────────────────
-								// Listening: 3 consecutive positive frames (60 ms) → barge-in.
-								// Speaking:  10 consecutive positive frames (200 ms) → barge-in.
-								// The higher speaking threshold requires the human to sustain
-								// clear speech for 200 ms before breaking through — laptop speaker
-								// echo and short noise bursts rarely sustain that long at the same
-								// energy level as real speech in aggressive VAD mode 3.
-								vadThreshold := 3
-								if sm.Is(StateSpeaking) {
-									vadThreshold = 10
-								}
+							// 2. Feed exact 640-byte (20 ms at 16kHz) chunks to WebRTC VAD
+							vadBuffer = append(vadBuffer, pcm16Bytes...)
+							for len(vadBuffer) >= 640 {
+								chunk := vadBuffer[:640]
+								vadBuffer = vadBuffer[640:]
 
-								activeVoice, err := vad.Process(8000, chunk)
+								activeVoice, err := vad.Process(16000, chunk)
 								if err != nil {
 									log.Printf("VAD process error: %v", err)
-								} else if activeVoice {
+									continue
+								}
+
+								if activeVoice {
+									consecutivePositive++
 									if orch != nil {
 										orch.SetSpeechActive(sessionID, true)
 									}
-									consecutivePositive++
+									vadThreshold := 2
+									if sm.Is(StateSpeaking) {
+										vadThreshold = 5
+									}
 									if consecutivePositive >= vadThreshold {
 										triggerInterrupt()
 									}
@@ -266,7 +255,6 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 									}
 									consecutivePositive = 0
 								}
-								vadBuffer = vadBuffer[320:]
 							}
 						}
 					}()

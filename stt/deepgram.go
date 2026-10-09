@@ -22,6 +22,7 @@ func (c *deepgramCallback) Message(mr *msginterfaces.MessageResponse) error {
 	if len(mr.Channel.Alternatives) > 0 {
 		transcript := mr.Channel.Alternatives[0].Transcript
 		if transcript != "" {
+			log.Printf("[Deepgram STT] (isFinal: %t): %q", mr.IsFinal, transcript)
 			if c.onTranscript != nil {
 				c.onTranscript(transcript, mr.IsFinal)
 			} else {
@@ -58,7 +59,10 @@ func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, is
 		Model:          "nova-3",
 		Language:       "en-US",
 		SmartFormat:    true,
-		InterimResults: true,  // Still needed for low-latency interim tokens
+		InterimResults: true,
+		Encoding:       "linear16",
+		SampleRate:     16000,
+		Channels:       1,
 	}
 
 	cb := &deepgramCallback{

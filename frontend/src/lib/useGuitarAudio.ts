@@ -25,7 +25,7 @@ export function useGuitarAudio() {
     confidence: 0,
     inversion: false,
     streak: 0,
-    feedbackText: 'Click the button below to start your lesson. Zeplin will greet you.',
+    feedbackText: 'Almost there. Your B string sounds muted, so lift your ring finger slightly and strum again.',
     userSpeech: '',
     stringStatus: ['ok', 'ok', 'ok', 'ok', 'ok', 'ok'],
   });
@@ -38,22 +38,20 @@ export function useGuitarAudio() {
 
   const startSession = useCallback(async () => {
     try {
-      // 1. Microphone access without destructive noise suppression
-      const micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: false,
-          autoGainControl: false,
-          sampleRate: 48000,
-        },
+      // 1. Single microphone acquisition through LiveKit
+      const localAudioTrack = await LiveKit.createLocalAudioTrack({
+        echoCancellation: true,
+        noiseSuppression: false,
+        autoGainControl: true,
       });
+      localTrackRef.current = localAudioTrack;
 
-      // 2. AudioContext at 48kHz for DSP Chord Recognition
+      // 2. AudioContext at 48kHz for local DSP chord recognition
       const audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
       audioCtxRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-      // 3. Register DSP AudioWorklet
+      // 3. Feed the single mic stream to DSP worklet
       try {
         await audioCtx.audioWorklet.addModule('/worklet/guitar-dsp-processor.js');
         const dspNode = new AudioWorkletNode(audioCtx, 'guitar-dsp-processor', {
@@ -63,6 +61,7 @@ export function useGuitarAudio() {
         });
         dspNodeRef.current = dspNode;
 
+        const micStream = new MediaStream([localAudioTrack.mediaStreamTrack]);
         const source = audioCtx.createMediaStreamSource(micStream);
         source.connect(dspNode);
 
@@ -111,11 +110,6 @@ export function useGuitarAudio() {
         const room = new LiveKit.Room({
           adaptiveStream: true,
           dynacast: true,
-          audioCaptureDefaults: {
-            autoGainControl: false,
-            echoCancellation: true,
-            noiseSuppression: false,
-          },
         });
         roomRef.current = room;
 
@@ -124,43 +118,30 @@ export function useGuitarAudio() {
             ...prev,
             connected: true,
             agentState: 'listening',
-            feedbackText: 'Zeplin is joining and preparing to speak...',
+            feedbackText: 'Zeplin connected. Strum your guitar or talk to me!',
           }));
 
-          // Create and publish standard LiveKit LocalAudioTrack
+          // Publish the local audio track
           try {
-            const localAudioTrack = await LiveKit.createLocalAudioTrack({
-              echoCancellation: true,
-              noiseSuppression: false,
-              autoGainControl: false,
-            });
-            localTrackRef.current = localAudioTrack;
             await room.localParticipant.publishTrack(localAudioTrack, { name: 'student-audio' });
-            console.log('[LiveKit] Student audio track successfully published to room.');
+            console.log('[LiveKit] Student audio track published to room.');
           } catch (pubErr) {
-            console.error('Failed to create/publish local audio track:', pubErr);
-            // Fallback to existing stream track if needed
-            const rawTrack = micStream.getAudioTracks()[0];
-            if (rawTrack) {
-              await room.localParticipant.publishTrack(rawTrack, { name: 'student-audio' });
-            }
+            console.error('Failed to publish audio track:', pubErr);
           }
 
-          // Trigger single backend handshake for verbal greeting
+          // Single handshake with target chord
           setTimeout(() => {
             try {
               room.localParticipant.publishData(
-                new TextEncoder().encode(JSON.stringify({ event: 'student_connected' })),
-                { reliable: true }
-              );
-              room.localParticipant.publishData(
-                new TextEncoder().encode(JSON.stringify({ event: 'set_target_chord', chord: 'G_Major' })),
+                new TextEncoder().encode(
+                  JSON.stringify({ event: 'student_connected', chord: 'G_Major' })
+                ),
                 { reliable: true }
               );
             } catch (e) {
               console.error('Handshake publish error:', e);
             }
-          }, 300);
+          }, 250);
         });
 
         // Attach agent voice track (Deepgram TTS via LiveKit)
@@ -214,7 +195,7 @@ export function useGuitarAudio() {
         }));
       }
 
-      // 5. Browser Speech Recognition (Listen to Student's Voice in parallel)
+      // 5. Browser Speech Recognition (Listen to student questions in parallel)
       const win = window as unknown as {
         SpeechRecognition?: new () => {
           continuous: boolean;
@@ -255,10 +236,11 @@ export function useGuitarAudio() {
             for (let i = ev.resultIndex; i < ev.results.length; ++i) {
               transcript += ev.results[i][0].transcript;
             }
-            if (transcript.trim()) {
-              setState((prev) => ({ ...prev, userSpeech: transcript.trim() }));
+            const clean = transcript.trim();
+            if (clean) {
+              console.log('[Student Speech]:', clean);
+              setState((prev) => ({ ...prev, userSpeech: clean }));
 
-              // Forward user speech question to backend brain via DataChannel
               if (
                 roomRef.current &&
                 roomRef.current.state === LiveKit.ConnectionState.Connected
@@ -266,7 +248,7 @@ export function useGuitarAudio() {
                 try {
                   roomRef.current.localParticipant.publishData(
                     new TextEncoder().encode(
-                      JSON.stringify({ event: 'student_speech', text: transcript.trim() })
+                      JSON.stringify({ event: 'student_speech', text: clean })
                     ),
                     { reliable: true }
                   );
@@ -278,11 +260,10 @@ export function useGuitarAudio() {
           };
 
           rec.onerror = () => {};
-
           rec.start();
           recognitionRef.current = rec;
         } catch (recErr) {
-          console.warn('SpeechRecognition start notice:', recErr);
+          console.warn('SpeechRecognition notice:', recErr);
         }
       }
     } catch (err) {
@@ -323,7 +304,7 @@ export function useGuitarAudio() {
     }));
   }, []);
 
-  // Web Audio Chord Synthesizer ("Hear this chord")
+  // Web Audio Chord Synthesizer ("Repeat" chord audio)
   const playChordAudio = useCallback((notes: string[]) => {
     try {
       const ctx = new (window.AudioContext ||

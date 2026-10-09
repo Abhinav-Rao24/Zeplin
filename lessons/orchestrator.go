@@ -129,6 +129,19 @@ func (o *Orchestrator) StartSession(sessionID string) {
 	o.publishState(sess, dsp.ChordEvent{}, greeting)
 }
 
+// SetTargetChordQuiet updates target chord without triggering speech.
+func (o *Orchestrator) SetTargetChordQuiet(sessionID, chordName string) {
+	sess := o.GetOrCreateSession(sessionID)
+	def := ChordByName(chordName)
+	if def == nil {
+		return
+	}
+	sess.mu.Lock()
+	sess.CurrentStep.TargetChord = chordName
+	sess.SuccessStreak = 0
+	sess.mu.Unlock()
+}
+
 // SetTargetChord switches the active target chord and provides spoken instruction.
 func (o *Orchestrator) SetTargetChord(sessionID, chordName string) {
 	sess := o.GetOrCreateSession(sessionID)
@@ -137,6 +150,10 @@ func (o *Orchestrator) SetTargetChord(sessionID, chordName string) {
 		return
 	}
 	sess.mu.Lock()
+	if sess.CurrentStep.TargetChord == chordName {
+		sess.mu.Unlock()
+		return
+	}
 	sess.CurrentStep.TargetChord = chordName
 	sess.SuccessStreak = 0
 	sess.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 	"github.com/deepgram/deepgram-go-sdk/v3/pkg/client/interfaces"
@@ -88,11 +89,29 @@ func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, is
 
 	log.Println("Deepgram STT connection established.")
 
-	return &DeepgramStreamSTT{
+	stt := &DeepgramStreamSTT{
 		ws:     ws,
 		ctx:    ctx,
 		cancel: cancel,
-	}, nil
+	}
+
+	// Periodic KeepAlive to prevent Deepgram 1011 timeout during long student pauses / practice intervals
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := ws.KeepAlive(); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	return stt, nil
 }
 
 // Write implements io.Writer so we can stream data (e.g. from OggWriter) directly to Deepgram

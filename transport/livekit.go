@@ -23,26 +23,81 @@ import (
 	pionmedia "github.com/pion/webrtc/v4/pkg/media"
 )
 
-// echoOverlapRatio computes the fraction of words in candidate that appear in reference.
-// A value > 0.40 indicates the STT transcript is likely an acoustic echo of the bot's own
-// TTS output that slipped through browser-level AEC, not genuine human speech.
-func echoOverlapRatio(candidate, reference string) float64 {
-	candWords := strings.Fields(strings.ToLower(candidate))
-	refWords := strings.Fields(strings.ToLower(reference))
-	if len(candWords) == 0 || len(refWords) == 0 {
-		return 0
+var stopWords = map[string]bool{
+	"i": true, "me": true, "my": true, "we": true, "our": true, "you": true, "your": true,
+	"he": true, "she": true, "it": true, "they": true, "what": true, "who": true, "which": true,
+	"is": true, "am": true, "are": true, "was": true, "were": true, "be": true, "been": true,
+	"have": true, "has": true, "had": true, "do": true, "does": true, "did": true,
+	"a": true, "an": true, "the": true, "and": true, "but": true, "if": true, "or": true,
+	"as": true, "until": true, "while": true, "of": true, "at": true, "by": true, "for": true,
+	"with": true, "about": true, "against": true, "between": true, "into": true, "through": true,
+	"during": true, "before": true, "after": true, "above": true, "below": true, "to": true,
+	"from": true, "up": true, "down": true, "in": true, "out": true, "on": true, "off": true,
+	"over": true, "under": true, "again": true, "further": true, "then": true, "once": true,
+	"here": true, "there": true, "when": true, "where": true, "why": true, "how": true,
+	"all": true, "any": true, "both": true, "each": true, "few": true, "more": true,
+	"most": true, "other": true, "some": true, "such": true, "no": true, "nor": true,
+	"not": true, "only": true, "own": true, "same": true, "so": true, "than": true,
+	"too": true, "very": true, "can": true, "will": true, "just": true, "should": true,
+	"now": true, "that": true, "this": true,
+}
+
+// isAcousticEcho evaluates whether candidate is an acoustic bleed/echo of recent TTS speech.
+// It ignores universal stop words ("can", "you", "hear", "me") to avoid dropping legitimate
+// user questions while accurately catching multi-word phrases or content bleed from laptop speakers.
+func isAcousticEcho(candidate, reference string) bool {
+	candNorm := normalizeUtterance(candidate)
+	refNorm := normalizeUtterance(reference)
+	if candNorm == "" || refNorm == "" {
+		return false
 	}
-	refSet := make(map[string]bool, len(refWords))
-	for _, w := range refWords {
-		refSet[w] = true
+
+	candWords := strings.Fields(candNorm)
+	if len(candWords) == 0 {
+		return false
 	}
-	matches := 0
+
+	// 1. Verbatim multi-word phrase matching (>= 4 words)
+	if len(candWords) >= 4 && strings.Contains(refNorm, candNorm) {
+		return true
+	}
+
+	// 2. Content word overlap (ignoring stop words)
+	var candContent []string
 	for _, w := range candWords {
-		if refSet[w] {
+		clean := strings.Trim(w, "!?,.:;\"'")
+		if len(clean) >= 2 && !stopWords[clean] {
+			candContent = append(candContent, clean)
+		}
+	}
+
+	// Conversational questions made of stop words ("can you hear me", "who are you")
+	// are human speech and must NEVER be flagged as echo.
+	if len(candContent) == 0 {
+		return false
+	}
+
+	refWords := strings.Fields(refNorm)
+	refContentSet := make(map[string]bool)
+	for _, w := range refWords {
+		clean := strings.Trim(w, "!?,.:;\"'")
+		if len(clean) >= 2 && !stopWords[clean] {
+			refContentSet[clean] = true
+		}
+	}
+
+	matches := 0
+	for _, w := range candContent {
+		if refContentSet[w] {
 			matches++
 		}
 	}
-	return float64(matches) / float64(len(candWords))
+
+	// Require at least 2 distinct content words to match AND >= 60% overlap
+	if matches < 2 {
+		return false
+	}
+	return float64(matches)/float64(len(candContent)) >= 0.60
 }
 
 // normalizeUtterance cleans punctuation, symbols, and whitespace for transcript comparison.
@@ -217,9 +272,8 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						// genuine NEW words that do not match recent TTS output (echo guard).
 						if sm.Is(StateSpeaking) {
 							recentSpoken := ttsEngine.RecentSpokenText()
-							overlap := echoOverlapRatio(transcript, recentSpoken)
-							if overlap > 0.40 {
-								log.Printf("[Echo Guard] Dropped STT (%.0f%% overlap with recent TTS): %q", overlap*100, transcript)
+							if isAcousticEcho(transcript, recentSpoken) {
+								log.Printf("[Echo Guard] Dropped STT (acoustic echo of recent TTS): %q", transcript)
 								return
 							}
 							log.Printf("[Barge-In] Confirmed new speech word from STT: %q", transcript)

@@ -197,3 +197,23 @@ func TestStaleOrPrefixTurnGuard(t *testing.T) {
 		t.Errorf("expected 'What chord was that' to NOT be stale against 'Who are you?'")
 	}
 }
+
+func TestAcousticEchoGuard(t *testing.T) {
+	ttsRef := "I'm Zeplin, your ambient guitar tutor. I'm here to listen, give feedback, and keep things fun while you practice."
+
+	// 1. Conversational questions containing common stop words MUST NOT be dropped as echo
+	if isAcousticEcho("Can you hear me?", ttsRef) {
+		t.Errorf("expected 'Can you hear me?' to NOT be flagged as acoustic echo")
+	}
+	if isAcousticEcho("Who are you?", ttsRef) {
+		t.Errorf("expected 'Who are you?' to NOT be flagged as acoustic echo")
+	}
+	if isAcousticEcho("Are you there?", ttsRef) {
+		t.Errorf("expected 'Are you there?' to NOT be flagged as acoustic echo")
+	}
+
+	// 2. Genuine acoustic echo (verbatim multi-word loopback from speakers) MUST be dropped
+	if !isAcousticEcho("give feedback and keep things fun while you practice", ttsRef) {
+		t.Errorf("expected verbatim playback bleed to be flagged as acoustic echo")
+	}
+}

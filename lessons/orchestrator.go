@@ -399,15 +399,20 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 		lines = append(lines, fmt.Sprintf("[Lesson Recurring Issues]: %s", formatMistakes(mistakes)))
 	}
 	lines = append(lines, fmt.Sprintf("[Lesson Stats]: %s", sess.FormatPracticeSummary()))
-	if len(sess.RecentStrums) == 0 {
-		lines = append(lines, "[Recent Strum Telemetry]: No guitar strum detected in this session yet.")
-		lines = append(lines, "[Tutor Instruction]: If the student asks what chord they just played or what chord that was, tell them directly that you didn't hear a strum, and invite them to strum clearly close to the mic. Do NOT guess or claim they played the curriculum target chord.")
+	
+	if isGuitarOrChordInquiry(transcript) {
+		if len(sess.RecentStrums) == 0 {
+			lines = append(lines, "[Recent Strum Telemetry]: No guitar strum detected in this session yet.")
+			lines = append(lines, "[Tutor Instruction]: The student asked about their guitar/chord, but no strum was detected yet. Tell them directly that you didn't hear a strum, and invite them to strum clearly close to the mic. Do NOT guess or claim they played the curriculum target chord.")
+		} else {
+			lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
+			lastStrum := sess.RecentStrums[len(sess.RecentStrums)-1]
+			lines = append(lines, fmt.Sprintf("[Most Recent Strum Fact]: Detected as %s (confidence %.0f%%, bass %s)",
+				displayName(lastStrum.DetectedChord), lastStrum.Confidence*100, lastStrum.BassNote))
+			lines = append(lines, "[Tutor Instruction]: The student asked about their playing. Answer factually using [Most Recent Strum Fact].")
+		}
 	} else {
-		lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
-		lastStrum := sess.RecentStrums[len(sess.RecentStrums)-1]
-		lines = append(lines, fmt.Sprintf("[Most Recent Strum Fact]: Detected as %s (confidence %.0f%%, bass %s)",
-			displayName(lastStrum.DetectedChord), lastStrum.Confidence*100, lastStrum.BassNote))
-		lines = append(lines, "[Tutor Instruction]: If the student asks what chord they played, answer using [Most Recent Strum Fact].")
+		lines = append(lines, "[Instruction]: The student is asking a conversational question or checking the microphone (e.g. 'Can you hear me?', 'Who are you?', 'How are you?'). Respond directly, naturally, and warmly to their question. Do NOT mention guitar strums, practice, or chords.")
 	}
 	lines = append(lines, fmt.Sprintf("[Student says]: %s", transcript))
 
@@ -548,4 +553,17 @@ func formatMistakes(m map[MistakeType]int) string {
 		parts = append(parts, fmt.Sprintf("%s×%d", k, v))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// isGuitarOrChordInquiry detects if the student's question is asking about guitar playing,
+// chords, strums, or physical mechanics, rather than conversational greetings or mic checks.
+func isGuitarOrChordInquiry(text string) bool {
+	q := strings.ToLower(text)
+	indicators := []string{"chord", "strum", "play", "played", "sound like", "what was that", "which chord", "fret", "string", "tuning"}
+	for _, ind := range indicators {
+		if strings.Contains(q, ind) {
+			return true
+		}
+	}
+	return false
 }

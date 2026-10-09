@@ -303,10 +303,16 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
     this._tuningOffsetCents = 0;
     this._isCalibrating     = false;
 
+    // Agent state awareness (Speaker bleed prevention)
+    this._isAgentSpeaking   = false;
+
     // Listen for control messages from the main thread
     this.port.onmessage = (e) => {
       const msg = e.data;
       switch (msg.type) {
+        case 'set_agent_state':
+          this._isAgentSpeaking = (msg.state === 'speaking');
+          break;
         case 'set_tuning_offset':
           this._tuningOffsetCents = msg.offsetCents || 0;
           break;
@@ -400,10 +406,15 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
     // Debounce: skip if a chord event fired too recently
     if (this._samplesSinceLastChord < DEBOUNCE_SAMPLES) return;
 
-    // ── Gate 1: RMS Energy ────────────────────────────────────────────────
+    // ── Gate 1: RMS Energy & Speaker Bleed Rejection ─────────────────────
     const rms  = computeRMS(win);
     const dbfs = toDBFS(rms);
-    if (dbfs < RMS_THRESHOLD_DBFS) return; // dead strum / palm mute / finger lift
+
+    // If agent is speaking, elevate minimum RMS threshold by +12dB to reject
+    // synthesized speech acoustics from laptop speakers leaking into the microphone.
+    // Genuine guitar pick attacks easily produce > -26 dBFS, whereas speaker bleed is typically < -32 dBFS.
+    const effectiveRmsThreshold = this._isAgentSpeaking ? Math.max(RMS_THRESHOLD_DBFS + 12, -26) : RMS_THRESHOLD_DBFS;
+    if (dbfs < effectiveRmsThreshold) return; // speaker bleed / dead strum / finger lift
 
     // ── Gate 2: Spectral Centroid ─────────────────────────────────────────
     const centroid = computeSpectralCentroid(mag);
@@ -416,7 +427,9 @@ class GuitarDSPProcessor extends AudioWorkletProcessor {
     // ── Gate 3: Harmonic Ratio ────────────────────────────────────────────
     const f0ForGate = bassHz > 0 ? bassHz : 200;
     const harmRatio = computeHarmonicRatio(mag, f0ForGate);
-    if (harmRatio < HARMONIC_RATIO_THRESHOLD) return; // inharmonic noise burst
+    // While agent speaks, require stronger harmonic resonance (0.45 vs 0.25) to reject vocal plosives
+    const effectiveHarmonicThreshold = this._isAgentSpeaking ? 0.45 : HARMONIC_RATIO_THRESHOLD;
+    if (harmRatio < effectiveHarmonicThreshold) return; // inharmonic noise burst / speech plosive
 
     // ── Chromagram ────────────────────────────────────────────────────────
     const chroma = computeChroma(mag, this._tuningOffsetCents);

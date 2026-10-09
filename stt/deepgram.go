@@ -63,7 +63,8 @@ func NewDeepgramStreamSTT(apiKey string, onTranscript func(transcript string, is
 		Encoding:       "linear16",
 		SampleRate:     16000,
 		Channels:       1,
-		Endpointing:    "350",
+		Endpointing:    "300",
+		UtteranceEndMs: "1000",
 		VadEvents:      true,
 	}
 

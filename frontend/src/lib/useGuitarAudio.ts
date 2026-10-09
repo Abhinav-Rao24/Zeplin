@@ -71,6 +71,8 @@ export function useGuitarAudio() {
         const source = audioCtx.createMediaStreamSource(micStream);
         source.connect(dspNode);
 
+        const lastSentRef = { chord: '', time: 0 };
+
         dspNode.port.onmessage = (e) => {
           const msg = e.data;
           if (msg.event === 'chord_detected') {
@@ -81,7 +83,17 @@ export function useGuitarAudio() {
               inversion: msg.inversion,
             }));
 
-            if (roomRef.current && roomRef.current.state === LiveKit.ConnectionState.Connected) {
+            // ── DataChannel Throttling ──────────────────────────────────────────
+            // Avoid saturating WebRTC DataChannel: only dispatch if either:
+            // 1. The detected chord changed, OR
+            // 2. At least 400ms have elapsed since the last transmission
+            const now = Date.now();
+            const chordChanged = msg.detected_chord !== lastSentRef.chord;
+            const timeElapsed = now - lastSentRef.time >= 400;
+
+            if ((chordChanged || timeElapsed) && roomRef.current && roomRef.current.state === LiveKit.ConnectionState.Connected) {
+              lastSentRef.chord = msg.detected_chord;
+              lastSentRef.time = now;
               try {
                 roomRef.current.localParticipant.publishData(
                   new TextEncoder().encode(JSON.stringify(msg)),
@@ -181,8 +193,15 @@ export function useGuitarAudio() {
               }));
 
               if (fb) {
+                // Inform AudioWorklet that agent is speaking to raise speaker bleed rejection threshold
+                if (dspNodeRef.current) {
+                  dspNodeRef.current.port.postMessage({ type: 'set_agent_state', state: 'speaking' });
+                }
                 setTimeout(() => {
                   setState((prev) => ({ ...prev, agentState: 'listening' }));
+                  if (dspNodeRef.current) {
+                    dspNodeRef.current.port.postMessage({ type: 'set_agent_state', state: 'listening' });
+                  }
                 }, 4000);
               }
             }

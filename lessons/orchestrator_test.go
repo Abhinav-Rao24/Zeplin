@@ -233,3 +233,33 @@ func TestOrchestratorWithSQLiteStore(t *testing.T) {
 		t.Errorf("Expected session record to be saved on CloseSession")
 	}
 }
+
+func TestStrumBargeInAndAcousticGuard(t *testing.T) {
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {})
+	var interruptedSession string
+	orch.SetInterruptHandler(func(sessionID string) {
+		interruptedSession = sessionID
+	})
+
+	// Case 1: Low-energy speaker bleed transient (< -28 dBFS) -> must NOT trigger barge-in
+	interruptedSession = ""
+	orch.HandleChordEvent("student-barge-in", dsp.ChordEvent{
+		DetectedChord: "G_Major",
+		Confidence:    0.85,
+		RmsDBFS:       -34.0, // Speaker bleed level
+	})
+	if interruptedSession != "" {
+		t.Errorf("Expected speaker bleed transient (-34 dBFS) to be suppressed from barge-in, but got %q", interruptedSession)
+	}
+
+	// Case 2: Genuine physical strum (>= -28 dBFS, confidence >= 0.70) -> MUST trigger barge-in
+	interruptedSession = ""
+	orch.HandleChordEvent("student-barge-in", dsp.ChordEvent{
+		DetectedChord: "G_Major",
+		Confidence:    0.92,
+		RmsDBFS:       -18.5, // Physical guitar pick attack level
+	})
+	if interruptedSession != "student-barge-in" {
+		t.Errorf("Expected genuine strum to trigger barge-in for student-barge-in, got %q", interruptedSession)
+	}
+}

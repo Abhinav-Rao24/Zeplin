@@ -67,6 +67,31 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 		telemetryRegistry.RecordFirstAudioFrame()
 	}
 
+	// Interrupt function to immediately halt active TTS playback and Groq inference
+	triggerInterrupt := func(targetSession string) {
+		if sm.Is(StateListening) {
+			return
+		}
+
+		log.Printf("[Barge-In] Interruption triggered for %s! Agent state: %s", targetSession, sm.Get())
+
+		// 1. Send Clear to Deepgram TTS to stop current audio generation.
+		ttsEngine.Clear()
+
+		// 2. Cancel the active Groq streaming turn.
+		brainInstance.Interrupt(targetSession)
+
+		// 3. Signal the pacing loop to drain any unplayed audio frames.
+		select {
+		case interruptChan <- struct{}{}:
+		default:
+		}
+	}
+
+	if orch != nil {
+		orch.SetInterruptHandler(triggerInterrupt)
+	}
+
 	roomCB := &lksdk.RoomCallback{
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -77,26 +102,8 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						orch.StartSession(sessionID)
 					}
 
-					triggerInterrupt := func() {
-						// Only interrupt if the agent is actively thinking or speaking.
-						// During StateListening there is no active generation to cancel.
-						if sm.Is(StateListening) {
-							return
-						}
-
-						log.Printf("[Barge-In] Interruption triggered! Agent state: %s", sm.Get())
-
-						// 1. Send Clear to Deepgram TTS to stop current audio generation.
-						ttsEngine.Clear()
-
-						// 2. Cancel the active Groq streaming turn.
-						brainInstance.Interrupt(sessionID)
-
-						// 3. Signal the pacing loop to drain any unplayed audio frames.
-						select {
-						case interruptChan <- struct{}{}:
-						default:
-						}
+					localInterrupt := func() {
+						triggerInterrupt(sessionID)
 					}
 
 					// Instantiate STT engine per participant.
@@ -129,14 +136,14 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							// This is confirmed human speech interrupting the agent!
 							if sm.Is(StateSpeaking) {
 								log.Printf("[Barge-In] Confirmed speech word from interim STT: %q", transcript)
-								triggerInterrupt()
+								localInterrupt()
 							}
 							return
 						}
 
 						// Final transcript: trigger interrupt (catches cases where no interim
 						// arrived) then hand off to the brain for a new response turn.
-						triggerInterrupt()
+						localInterrupt()
 						go func() {
 							telemetryRegistry.SetActiveSession(sessionID)
 							telemetryRegistry.Get(sessionID).StartThinking()
@@ -312,7 +319,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 									}
 									if consecutivePositive >= vadThreshold {
 										log.Printf("[VAD] Triggering interrupt for %s (consec=%d, RMS=%d)", sessionID, consecutivePositive, rms)
-										triggerInterrupt()
+										localInterrupt()
 									}
 								} else {
 									if orch != nil && consecutivePositive > 0 {

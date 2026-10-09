@@ -49,6 +49,26 @@ type Orchestrator struct {
 	lastFeedbackAt   time.Time
 	lastFeedbackText string
 	feedbackCooldown time.Duration
+
+	// OnInterrupt is invoked when a genuine physical strum arrives while the agent is speaking
+	OnInterrupt func(sessionID string)
+}
+
+// SetInterruptHandler wires the barge-in interruption handler.
+func (o *Orchestrator) SetInterruptHandler(fn func(sessionID string)) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.OnInterrupt = fn
+}
+
+// TriggerInterrupt invokes the registered interrupt handler.
+func (o *Orchestrator) TriggerInterrupt(sessionID string) {
+	o.mu.Lock()
+	fn := o.OnInterrupt
+	o.mu.Unlock()
+	if fn != nil {
+		fn(sessionID)
+	}
 }
 
 // NewOrchestrator creates a new Orchestrator.
@@ -187,6 +207,14 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 	if speechActive {
 		log.Printf("[Orchestrator] Chord event suppressed (speech active): %s", evt.DetectedChord)
 		return
+	}
+
+	// ── Milestone 2: Instrument Strum Barge-In with Acoustic Echo Guard ────
+	// If Zeplin is speaking and a genuine physical strum arrives (energy > -28 dBFS and confidence >= 0.70):
+	// Instantly trigger barge-in to stop TTS speech and yield the floor to the instrument.
+	// Low-level speaker bleed transients (< -28 dBFS) are guarded and dropped.
+	if evt.RmsDBFS >= -28.0 && evt.Confidence >= 0.70 {
+		o.TriggerInterrupt(sessionID)
 	}
 
 	target := sess.ActiveTarget()

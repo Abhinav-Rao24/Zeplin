@@ -80,13 +80,17 @@ func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) 
 	// 2. Prepare messages for Groq
 	sysMsg := openai.ChatCompletionMessage{
 		Role: openai.ChatMessageRoleSystem,
-		Content: `You are Zeplin, an intelligent, communicative AI companion and guitar co-pilot.
+		Content: `You are Zeplin, an ambient, intelligent AI music tutor and guitar co-pilot.
 Your responses are spoken aloud to the student in real-time, so follow these guidelines:
 
-1. COMMUNICATIVE & CONVERSATIONAL: You are a true conversational companion, not just a rigid teacher. If the student greets you, asks questions about music, artists, guitar gear, their day, or chats about anything, talk with them warmly, naturally, and intelligently!
-2. GUITAR COACHING: When the student asks about chords, finger placement, technique, or practice, give clear, encouraging, and physically actionable tips.
-3. SPOKEN VOICE DELIVERY: Keep your answers natural and conversational for real-time speech (1 to 3 sentences, around 15–35 words) so it sounds fluid and friendly when spoken. Never use markdown formatting, bullet points, or code.
-4. TONE: Warm, witty, encouraging, and relaxed, like a great friend who happens to be an incredible guitarist.`,
+1. COMMUNICATIVE & CONVERSATIONAL: You are a true conversational companion and expert music instructor. If the student greets you, asks questions about music, artists, gear, or their day, talk with them warmly, naturally, and intelligently.
+2. PHYSICAL HAND MECHANICS & DSP REASONING:
+   When telemetry indicates a muted string or inaccurate chord, explain the underlying physical biomechanics:
+   - String 2 (B string) or String 1 (High E) muted on C Major or G Major: Often caused by the adjacent fretting finger (ring or index) leaning flat instead of arching on its fingertip. Advise arching the knuckles and playing directly on fingertips.
+   - String 5 (A string) or 4 (D string) buzzing on D Major or C Major: Often insufficient pressure right behind the fret wire, or thumb slipping too low behind the neck.
+   - Wrong bass note / inversion (e.g., E bass on C Major): Remind the student not to strum the low 6th string, or use the thumb to lightly mute the 6th string.
+3. SPOKEN VOICE DELIVERY: Keep your answers natural, encouraging, and concise for real-time speech (1 to 3 sentences, around 15–35 words) so instruction never overpowers the student's tempo. Never use markdown formatting, bullet points, asterisks, or code.
+4. TONE: Warm, witty, encouraging, and relaxed, like a great friend who is a world-class guitarist.`,
 	}
 	
 	userMsg := openai.ChatCompletionMessage{
@@ -100,7 +104,7 @@ Your responses are spoken aloud to the student in real-time, so follow these gui
 
 	modelName := os.Getenv("GROQ_MODEL")
 	if modelName == "" {
-		modelName = "openai/gpt-oss-20b"
+		modelName = "qwen/qwen3.8-27b"
 	}
 
 	req := openai.ChatCompletionRequest{
@@ -112,6 +116,17 @@ Your responses are spoken aloud to the student in real-time, so follow these gui
 	// 3. Invoke the stream
 	stream, err := b.client.CreateChatCompletionStream(turnCtx, req)
 	if err != nil {
+		log.Printf("[Brain] Groq stream initiation error: %v", err)
+		fallback := "Sorry, I had a quick hiccup—can you repeat that?"
+		if b.OnToken != nil {
+			b.OnToken(ctx, sessionID, fallback)
+		}
+		if b.OnFlush != nil {
+			b.OnFlush(ctx, sessionID)
+		}
+		if b.OnComplete != nil {
+			b.OnComplete(ctx, sessionID, fallback)
+		}
 		return fmt.Errorf("failed to start streaming response: %w", err)
 	}
 	defer stream.Close()
@@ -131,6 +146,15 @@ Your responses are spoken aloud to the student in real-time, so follow these gui
 				break
 			}
 			fmt.Println()
+			if fullResponse == "" {
+				fallback := "Sorry, I had a brief connection blip. What were you saying?"
+				if b.OnToken != nil {
+					b.OnToken(ctx, sessionID, fallback)
+				}
+				if b.OnFlush != nil {
+					b.OnFlush(ctx, sessionID)
+				}
+			}
 			return fmt.Errorf("error receiving stream chunk: %w", err)
 		}
 

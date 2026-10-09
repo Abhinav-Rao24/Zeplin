@@ -101,11 +101,11 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
                   cy={margin.top - 14}
                   r="5"
                   fill="none"
-                  stroke={isProblemMuted ? '#DC2626' : '#2B3630'}
+                  stroke={isProblemMuted ? '#D97706' : '#2B3630'}
                   strokeWidth="1.8"
                 />
                 {isProblemMuted && (
-                  <circle cx={x} cy={margin.top - 14} r="2.5" fill="#DC2626" />
+                  <circle cx={x} cy={margin.top - 14} r="2.5" fill="#D97706" />
                 )}
               </g>
             );
@@ -113,7 +113,7 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
           return null;
         })}
 
-        {/* Finger Dots (Solid Forest Green Circles with Finger Numbers) */}
+        {/* Finger Dots (Forest Green for correct, Amber for muted/buzzing) */}
         {chord.diagram.frets.map((fret, s) => {
           if (fret <= 0) return null;
           const x = margin.left + s * stringSpacing;
@@ -128,8 +128,8 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
                 cx={x}
                 cy={y}
                 r="11"
-                fill={isProblem ? '#DC2626' : '#244230'}
-                stroke={isProblem ? '#FCA5A5' : '#2E523C'}
+                fill={isProblem ? '#D97706' : '#244230'}
+                stroke={isProblem ? '#FDE68A' : '#2E523C'}
                 strokeWidth="1.5"
                 filter="drop-shadow(0 2px 3px rgba(0,0,0,0.12))"
               />

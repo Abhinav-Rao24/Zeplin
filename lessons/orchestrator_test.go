@@ -263,3 +263,83 @@ func TestStrumBargeInAndAcousticGuard(t *testing.T) {
 		t.Errorf("Expected genuine strum to trigger barge-in for student-barge-in, got %q", interruptedSession)
 	}
 }
+
+func TestStrumTelemetryWindowAndMutedDetection(t *testing.T) {
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {})
+	sessionID := "student-telemetry"
+	sess := orch.GetOrCreateSession(sessionID)
+
+	// Step 1: Default target is E_Minor
+	// Strum 1: Clean E_Minor
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "E_Minor",
+		Confidence:    0.95,
+		BassNote:      "E2",
+	})
+
+	// Strum 2: Low confidence E_Minor (triggers muted B string index 4 detection)
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "E_Minor",
+		Confidence:    0.72,
+		BassNote:      "E2",
+	})
+
+	// Strum 3: Wrong chord (sounded like G_Major)
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "G_Major",
+		Confidence:    0.88,
+		BassNote:      "G2",
+	})
+
+	// Strum 4: Clean E_Minor
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "E_Minor",
+		Confidence:    0.91,
+		BassNote:      "E2",
+	})
+
+	// Strum 5: Inversion (wrong bass A2)
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "E_Minor",
+		Confidence:    0.85,
+		Inversion:     true,
+		BassNote:      "A2",
+	})
+
+	if len(sess.RecentStrums) != 5 {
+		t.Fatalf("Expected 5 strums in rolling window, got %d", len(sess.RecentStrums))
+	}
+
+	// Strum 6: Another clean E_Minor -> rolling window should remain capped at 5
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "E_Minor",
+		Confidence:    0.96,
+		BassNote:      "E2",
+	})
+
+	if len(sess.RecentStrums) != 5 {
+		t.Fatalf("Expected rolling window to cap at 5, got %d", len(sess.RecentStrums))
+	}
+
+	summary := sess.FormatRecentTelemetry()
+	if summary == "" {
+		t.Fatalf("Expected non-empty telemetry summary")
+	}
+
+	// Verify the summary contains the telemetry details
+	if !containsStr(summary, "Muted string(s): B") && !containsStr(summary, "Wrong chord") {
+		t.Errorf("Telemetry summary missing expected mistake context:\n%s", summary)
+	}
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && (func() bool {
+		for i := 0; i+len(substr) <= len(s); i++ {
+			if s[i:i+len(substr)] == substr {
+				return true
+			}
+		}
+		return false
+	})())
+}
+

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { CHORD_LIBRARY, LESSON_SEQUENCE } from '@/lib/chords';
 import { ChordDiagram } from '@/components/ChordDiagram';
+import { StrummingPattern } from '@/components/StrummingPattern';
 import { useGuitarAudio } from '@/lib/useGuitarAudio';
 import {
   Mic,
@@ -121,6 +122,15 @@ export default function GuitarCoPilotPage() {
               ))}
             </div>
           </div>
+
+          {/* Strumming Pattern Rhythm Guide */}
+          {chordData.strummingPattern && (
+            <StrummingPattern
+              name={chordData.strummingPattern.name}
+              meter={chordData.strummingPattern.meter}
+              beats={chordData.strummingPattern.beats}
+            />
+          )}
         </div>
 
         {/* ── BOTTOM INTERACTION CONTROLS ──────────────────────────── */}

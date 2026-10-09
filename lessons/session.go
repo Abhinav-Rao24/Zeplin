@@ -1,6 +1,8 @@
 package lessons
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,6 +51,18 @@ const (
 	MistakeLowEnergy   MistakeType = "low_energy"
 )
 
+// StrumRecord represents a single recorded strum's telemetry.
+type StrumRecord struct {
+	Timestamp     time.Time
+	DetectedChord string
+	TargetChord   string
+	Confidence    float64
+	Inversion     bool
+	BassNote      string
+	MutedStrings  []string
+	IsCorrect     bool
+}
+
 // LessonSession holds all runtime state for a single learning session.
 // It is NOT concurrency-safe on its own; the Orchestrator holds the mutex.
 type LessonSession struct {
@@ -73,6 +87,9 @@ type LessonSession struct {
 	// Suppression: set true when student is speaking (VAD active)
 	SpeechActive bool
 
+	// RecentStrums holds the rolling window of the last 5 strums for DSP-grounded tutoring
+	RecentStrums []StrumRecord
+
 	// TuningOffsetCents is the measured offset at session start (±cents from A=440)
 	TuningOffsetCents float64
 	TuningCalibrated  bool
@@ -83,10 +100,11 @@ type LessonSession struct {
 // NewLessonSession creates a session starting at the first curriculum step.
 func NewLessonSession(sessionID, studentName string) *LessonSession {
 	s := &LessonSession{
-		SessionID:   sessionID,
-		StudentName: studentName,
-		StartedAt:   time.Now(),
-		MistakeLog:  make(map[MistakeType]int),
+		SessionID:    sessionID,
+		StudentName:  studentName,
+		StartedAt:    time.Now(),
+		MistakeLog:   make(map[MistakeType]int),
+		RecentStrums: make([]StrumRecord, 0, 5),
 	}
 	s.setStep(0)
 	return s
@@ -160,3 +178,39 @@ func (s *LessonSession) ResetStreak() {
 	s.SuccessStreak = 0
 	s.TotalStrums++
 }
+
+// RecordStrum appends a strum to the rolling 5-strum telemetry window.
+func (s *LessonSession) RecordStrum(rec StrumRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.RecentStrums = append(s.RecentStrums, rec)
+	if len(s.RecentStrums) > 5 {
+		s.RecentStrums = s.RecentStrums[len(s.RecentStrums)-5:]
+	}
+}
+
+// FormatRecentTelemetry formats the last 5 strums into a concise summary for LLM context.
+func (s *LessonSession) FormatRecentTelemetry() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.RecentStrums) == 0 {
+		return "No recent strums recorded."
+	}
+	var lines []string
+	for i, r := range s.RecentStrums {
+		status := "Clean"
+		if !r.IsCorrect {
+			if r.DetectedChord != r.TargetChord {
+				status = "Wrong chord (" + r.DetectedChord + ")"
+			} else if r.Inversion {
+				status = "Wrong bass (" + r.BassNote + " ringing)"
+			} else if len(r.MutedStrings) > 0 {
+				status = "Muted string(s): " + strings.Join(r.MutedStrings, ", ")
+			}
+		}
+		lines = append(lines, fmt.Sprintf("- Strum %d: Target %s -> Detected %s (Confidence: %.0f%%, Status: %s)",
+			i+1, r.TargetChord, r.DetectedChord, r.Confidence*100, status))
+	}
+	return strings.Join(lines, "\n")
+}
+

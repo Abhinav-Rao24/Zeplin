@@ -223,8 +223,26 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 	log.Printf("[Orchestrator] Chord: detected=%q target=%q bass=%s conf=%.2f inv=%v",
 		evt.DetectedChord, target, evt.BassNote, evt.Confidence, evt.Inversion)
 
-	// ── Case 1: Correct chord, clean voicing ─────────────────────────────
 	mutedIssues := findMutedIssues(evt, targetDef)
+
+	// ── Telemetry Recording (Milestone 3) ─────────────────────────────────
+	var mutedNames []string
+	for _, idx := range mutedIssues {
+		mutedNames = append(mutedNames, stringIndexToName(idx))
+	}
+	isClean := (evt.DetectedChord == target && !evt.Inversion && len(mutedIssues) == 0)
+	sess.RecordStrum(StrumRecord{
+		Timestamp:     time.Now(),
+		DetectedChord: evt.DetectedChord,
+		TargetChord:   target,
+		Confidence:    evt.Confidence,
+		Inversion:     evt.Inversion,
+		BassNote:      evt.BassNote,
+		MutedStrings:  mutedNames,
+		IsCorrect:     isClean,
+	})
+
+	// ── Case 1: Correct chord, clean voicing ─────────────────────────────
 	if evt.DetectedChord == target && !evt.Inversion && len(mutedIssues) == 0 {
 		streak := sess.IncrStreak()
 		step := sess.CurrentStep
@@ -379,6 +397,7 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 	if len(mistakes) > 0 {
 		lines = append(lines, fmt.Sprintf("[Lesson] Recurring issues: %s", formatMistakes(mistakes)))
 	}
+	lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
 	lines = append(lines, fmt.Sprintf("[Student says]: %s", transcript))
 
 	enriched := strings.Join(lines, "\n")
@@ -487,7 +506,7 @@ func findMutedIssues(evt dsp.ChordEvent, def *ChordDef) []int {
 		return nil
 	}
 	if evt.Confidence < 0.78 {
-		return []int{1} // B string is the most common culprit for beginners
+		return []int{4} // B string (index 4) is the most common culprit for beginners
 	}
 	return nil
 }

@@ -139,6 +139,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 	ttsEngine.OnAudioFrame = func() {
 		telemetryRegistry.RecordFirstAudioFrame()
 	}
+	ttsEngine.OnFlushed = func() {
+		if ttsEngine.QueueLen() == 0 && sm.Is(StateSpeaking) {
+			transitionToListening(sm, telemetryRegistry)
+		}
+	}
 
 	// Interrupt function to immediately halt active TTS playback and Groq inference
 	triggerInterrupt := func(targetSession string) {
@@ -216,7 +221,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						thisTurnID := activeTurnID
 						lastFinalizedText = text
 
-						localInterrupt()
+						if sm.Is(StateSpeaking) || sm.Is(StateThinking) {
+							localInterrupt()
+						}
 						go func(t string, tID uint64) {
 							telemetryRegistry.SetActiveSession(sessionID)
 							telemetryRegistry.Get(sessionID).StartThinking()
@@ -262,24 +269,35 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							return
 						}
 
-						// 2. Barge-In Text Guard:
+						// If previous turn's audio finished or was flushed, cleanly revert to Listening
+						if sm.Is(StateSpeaking) && ttsEngine.QueueLen() == 0 && ttsEngine.IsFlushed() {
+							transitionToListening(sm, telemetryRegistry)
+						}
+
+						// 2. Final Utterance Handling (MUST NOT DROP):
+						// When isFinal: true arrives, the user completed their sentence.
+						// It must NEVER be dropped just because StateSpeaking was lingering.
+						if isFinal {
+							if sm.Is(StateSpeaking) {
+								log.Printf("[Barge-In] Turn completion arrived while speaking; interrupting agent: %q", transcript)
+								localInterrupt()
+								sm.Set(StateListening)
+							}
+							finalizeAndDispatchTurn(transcript)
+							return
+						}
+
+						// 3. Barge-In Text Guard for Interim Transcripts:
 						// Only trigger barge-in during StateSpeaking if the transcript contains
 						// genuine NEW words that do not match recent TTS output (echo guard).
 						if sm.Is(StateSpeaking) {
 							recentSpoken := ttsEngine.RecentSpokenText()
 							if isAcousticEcho(transcript, recentSpoken) {
-								log.Printf("[Echo Guard] Dropped STT (acoustic echo of recent TTS): %q", transcript)
+								log.Printf("[Echo Guard] Dropped interim STT (acoustic echo of recent TTS): %q", transcript)
 								return
 							}
 							log.Printf("[Barge-In] Confirmed new speech word from STT: %q", transcript)
 							localInterrupt()
-						}
-
-						// 3. Final vs Interim Handling:
-						// If Deepgram emits isFinal: true, finalize immediately
-						if isFinal {
-							finalizeAndDispatchTurn(transcript)
-							return
 						}
 
 						// 4. Decoupled 750ms Text Stability Timer:
@@ -662,14 +680,6 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						nextFrameTime = nextFrameTime.Add(duration)
 					}
 
-					// If this was the last frame in the queue, transition back to listening
-					// immediately to reduce latency for the user's response.
-					isLastFrame := (offset+frameSize >= len(chunk)) && len(ttsEngine.AudioChan) == 0
-					if isLastFrame && sm.Is(StateSpeaking) {
-						transitionToListening(sm, telemetryRegistry)
-						nextFrameTime = time.Time{}
-					}
-
 					// High-precision hybrid spin-yield pacing:
 					// 1. Coarse sleep for (remaining - 2ms) using a timer when remaining > 3ms to release CPU.
 					// 2. Fine spin-yield with runtime.Gosched() for the final <=3ms to eliminate OS scheduler jitter (<2ms).
@@ -704,6 +714,13 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						}
 					}
 				}
+
+				// If all frames of this chunk were pushed and no more audio is buffered,
+				// check if turn audio has completed/flushed and revert cleanly to Listening.
+				if ttsEngine.QueueLen() == 0 && ttsEngine.IsFlushed() && sm.Is(StateSpeaking) {
+					transitionToListening(sm, telemetryRegistry)
+					nextFrameTime = time.Time{}
+				}
 			nextPacingCycle:
 			}
 		}
@@ -717,7 +734,7 @@ func transitionToListening(sm *AgentStateMachine, registry *TelemetryRegistry) {
 		sm.Set(StateListening)
 		activeSession := registry.GetActiveSession()
 		if activeSession != "" {
-			registry.Get(activeSession).CompileAndReport()
+			go registry.Get(activeSession).CompileAndReport()
 		}
 	} else {
 		sm.Set(StateListening)

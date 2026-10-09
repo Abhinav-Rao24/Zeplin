@@ -65,7 +65,9 @@ type DeepgramStreamTTS struct {
 	wsURL        string
 	apiKey       string
 	recentText   recentSpeechBuffer
+	isFlushed    atomic.Bool
 	OnAudioFrame func()
+	OnFlushed    func()
 }
 
 // NewDeepgramStreamTTS instantiates a Gorilla WebSocket client to Deepgram TTS.
@@ -88,6 +90,7 @@ func NewDeepgramStreamTTS(apiKey string) (*DeepgramStreamTTS, error) {
 		wsURL:       wsURL,
 		apiKey:      apiKey,
 	}
+	t.isFlushed.Store(true)
 
 	conn, err := t.dial()
 	if err != nil {
@@ -220,6 +223,15 @@ func (t *DeepgramStreamTTS) runOneShotRead(audioChan chan<- []byte) error {
 			}
 		case websocket.TextMessage:
 			log.Printf("[Deepgram TTS] %s", string(message))
+			var msgObj struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(message, &msgObj); err == nil && msgObj.Type == "Flushed" {
+				t.isFlushed.Store(true)
+				if t.OnFlushed != nil {
+					t.OnFlushed()
+				}
+			}
 		}
 	}
 }
@@ -270,6 +282,7 @@ func (t *DeepgramStreamTTS) Speak(text string) error {
 		return nil
 	}
 
+	t.isFlushed.Store(false)
 	// Record in the echo buffer so the STT callback can detect acoustic feedback.
 	t.recentText.record(text)
 
@@ -294,7 +307,18 @@ func (t *DeepgramStreamTTS) RecentSpokenText() string {
 // Must be called immediately before a new brain turn begins generating tokens.
 func (t *DeepgramStreamTTS) StartNewTurn() {
 	t.clearing.Store(false)
+	t.isFlushed.Store(false)
 	t.recentText.reset()
+}
+
+// IsFlushed returns true if Deepgram has confirmed flushing of all audio for the turn.
+func (t *DeepgramStreamTTS) IsFlushed() bool {
+	return t.isFlushed.Load()
+}
+
+// QueueLen returns the count of buffered audio chunks awaiting playback.
+func (t *DeepgramStreamTTS) QueueLen() int {
+	return len(t.audioChanRW)
 }
 
 // Flush signals to Deepgram that the current text chunk is complete.
@@ -313,6 +337,7 @@ func (t *DeepgramStreamTTS) Flush() error {
 // then sends the Clear signal to Deepgram.
 func (t *DeepgramStreamTTS) Clear() error {
 	t.clearing.Store(true)
+	t.isFlushed.Store(true)
 
 	// Drain pending Speak/Flush commands.
 	for {

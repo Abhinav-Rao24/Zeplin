@@ -94,16 +94,21 @@ func (s *SessionTelemetry) RecordOutboundPush() {
 		interval := now.Sub(s.lastOutboundPush)
 		intervalMs := float64(interval) / float64(time.Millisecond)
 
-		s.frameCount++
-		s.sumOfIntervals += intervalMs
-		diff := intervalMs - 20.0
-		s.sumOfSquares += diff * diff
+		// Audio pacing loop operates on continuous 20ms frames.
+		// If interval is excessively long (>40ms) due to an inter-chunk network pause or stream start,
+		// ignore it so it does not distort the continuous 20ms loop pacing jitter metric.
+		if intervalMs <= 40.0 {
+			s.frameCount++
+			s.sumOfIntervals += intervalMs
+			diff := intervalMs - 20.0
+			s.sumOfSquares += diff * diff
 
-		// Welford's algorithm: online mean and squared difference update
-		delta := intervalMs - s.meanInterval
-		s.meanInterval += delta / float64(s.frameCount)
-		delta2 := intervalMs - s.meanInterval
-		s.m2 += delta * delta2
+			// Welford's algorithm: online mean and squared difference update
+			delta := intervalMs - s.meanInterval
+			s.meanInterval += delta / float64(s.frameCount)
+			delta2 := intervalMs - s.meanInterval
+			s.m2 += delta * delta2
+		}
 	}
 	s.lastOutboundPush = now
 }
@@ -111,25 +116,32 @@ func (s *SessionTelemetry) RecordOutboundPush() {
 // CompileAndReport compiles statistics and reports them to both slog and a scannable console card.
 func (s *SessionTelemetry) CompileAndReport() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	n := s.frameCount
 	var avgInterval float64
 	var jitterVariance float64
 	var jitterStdDev float64
 
-	n := s.frameCount
 	if n > 0 {
 		avgInterval = s.sumOfIntervals / float64(n)
 		jitterVariance = s.sumOfSquares / float64(n)
 		jitterStdDev = math.Sqrt(jitterVariance)
 	}
 
+	ttft := s.ttft
+	ttfa := s.ttfa
+	sessionID := s.sessionID
+	s.mu.Unlock() // Release lock immediately before console I/O to avoid blocking pacing
+
+	if n == 0 {
+		return
+	}
+
 	// Output structured slog logs
 	slog.Info("Conversation Turn Performance Report",
-		slog.String("session_id", s.sessionID),
+		slog.String("session_id", sessionID),
 		slog.Group("network_transit_durations",
-			slog.Duration("ttft_groq_inference", s.ttft),
-			slog.Duration("ttfa_deepgram_tts", s.ttfa),
+			slog.Duration("ttft_groq_inference", ttft),
+			slog.Duration("ttfa_deepgram_tts", ttfa),
 			slog.String("note", "Includes network round-trip and remote model execution"),
 		),
 		slog.Group("local_processing_and_pacing",
@@ -159,9 +171,9 @@ func (s *SessionTelemetry) CompileAndReport() {
 │   • Jitter Variance:              %8.2f ms²            │
 └────────────────────────────────────────────────────────┘
 `,
-		s.sessionID,
-		float64(s.ttft)/float64(time.Millisecond),
-		float64(s.ttfa)/float64(time.Millisecond),
+		sessionID,
+		float64(ttft)/float64(time.Millisecond),
+		float64(ttfa)/float64(time.Millisecond),
 		n,
 		avgInterval,
 		jitterStdDev,

@@ -408,6 +408,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 					// RTP read loop: decodes Opus directly to 16kHz PCM → sends to Deepgram STT & WebRTC VAD.
 					go func() {
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("[Audio] Recovered from track read panic during unsubscription: %v", r)
+							}
+						}()
 						defer sttEngine.Close()
 
 						for {

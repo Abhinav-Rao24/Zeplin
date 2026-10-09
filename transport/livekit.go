@@ -196,6 +196,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					consecutivePositive := 0
 					packetCount := 0
 
+					// Dynamic rolling noise floor baseline (RMS_floor)
+					// Initializes around typical quiet ambient room level (150).
+					// Tracks stationary background noise (coolers, fans, AC) during non-speech intervals using EMA.
+					rmsFloor := 150.0
+					const emaAlpha = 0.05 // Exponential Moving Average smoothing factor (~1s time constant)
+
 					// RTP read loop: decodes Opus directly to 16kHz PCM → sends to Deepgram STT & WebRTC VAD.
 					go func() {
 						defer sttEngine.Close()
@@ -230,8 +236,8 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							rms := int(math.Sqrt(float64(sumSq) / float64(sampleCount)))
 
 							if packetCount == 1 || packetCount%100 == 0 || (rms > 250 && packetCount%20 == 0) {
-								log.Printf("[Audio] Packet %d from %s: payload=%dB, samples=%d, RMS=%d",
-									packetCount, sessionID, len(rtpPacket.Payload), sampleCount, rms)
+								log.Printf("[Audio] Packet %d from %s: payload=%dB, samples=%d, RMS=%d (Floor=%.1f)",
+									packetCount, sessionID, len(rtpPacket.Payload), sampleCount, rms, rmsFloor)
 							}
 
 							// Convert int16 samples to raw 16kHz little-endian bytes
@@ -259,12 +265,31 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 									continue
 								}
 
-								// Layer 1 Noise Gate: Filter out low-energy ambient noise
-								// (coolers, fans, keyboard taps) so they never falsely trigger speech.
 								isSpeaking := sm.Is(StateSpeaking)
-								minRms := 300
+
+								// ── Update Rolling Noise Floor Baseline (RMS_floor) ──────────────
+								// Update baseline only when WebRTC VAD indicates silence/non-speech.
+								// In quiet/fan-only intervals, rmsFloor adapts dynamically to the ambient environment.
+								if !activeVoice {
+									rmsFloor = (1.0-emaAlpha)*rmsFloor + emaAlpha*float64(rms)
+									if rmsFloor < 50.0 {
+										rmsFloor = 50.0
+									}
+								}
+
+								// ── Layer 1 Noise Gate: Dynamic SNR Thresholding ─────────────────
+								// Speech must clear the rolling ambient noise floor by a healthy SNR margin:
+								// When listening: 2.5x ambient noise floor (minimum 250 RMS)
+								// When speaking:  3.5x ambient noise floor (minimum 450 RMS) to prevent self-interruption
+								minRms := int(rmsFloor * 2.5)
+								if minRms < 250 {
+									minRms = 250
+								}
 								if isSpeaking {
-									minRms = 450 // Higher threshold to interrupt while agent speaks
+									minRms = int(rmsFloor * 3.5)
+									if minRms < 450 {
+										minRms = 450
+									}
 								}
 
 								isRealVoice := activeVoice && rms >= minRms

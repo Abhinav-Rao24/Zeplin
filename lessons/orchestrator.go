@@ -387,23 +387,14 @@ func (o *Orchestrator) CloseSession(sessionID string) {
 func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, transcript string) {
 	sess := o.GetOrCreateSession(sessionID)
 
-	step := sess.CurrentStep
-	streak := sess.SuccessStreak
-	mistakes := sess.MistakeLog
-
-	// Build a structured context preamble for the brain
 	var lines []string
-	lines = append(lines, fmt.Sprintf("[Curriculum Reference]: Current exercise is %s (target %s, streak %d/%d). (Note: This is background curriculum reference only. Do NOT mention or push this target chord in greetings or general conversation unless the student specifically asks about their practice or chord lesson).",
-		step.Name, displayName(step.TargetChord), streak, step.RepsToAdvance))
-	if len(mistakes) > 0 {
-		lines = append(lines, fmt.Sprintf("[Lesson Recurring Issues]: %s", formatMistakes(mistakes)))
-	}
-	lines = append(lines, fmt.Sprintf("[Lesson Stats]: %s", sess.FormatPracticeSummary()))
-	
 	if isGuitarOrChordInquiry(transcript) {
+		step := sess.CurrentStep
+		lines = append(lines, fmt.Sprintf("[Lesson]: Exercise: %s (Target: %s, streak %d/%d)",
+			step.Name, displayName(step.TargetChord), sess.SuccessStreak, step.RepsToAdvance))
 		if len(sess.RecentStrums) == 0 {
 			lines = append(lines, "[Recent Strum Telemetry]: No guitar strum detected in this session yet.")
-			lines = append(lines, "[Tutor Instruction]: The student asked about their guitar/chord, but no strum was detected yet. Tell them directly that you didn't hear a strum, and invite them to strum clearly close to the mic. Do NOT guess or claim they played the curriculum target chord.")
+			lines = append(lines, "[Tutor Instruction]: The student asked about guitar/chord, but no strum was detected yet. Tell them directly you didn't catch a strum and invite them to strum clearly close to the mic. Do NOT guess.")
 		} else {
 			lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
 			lastStrum := sess.RecentStrums[len(sess.RecentStrums)-1]
@@ -412,7 +403,7 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 			lines = append(lines, "[Tutor Instruction]: The student asked about their playing. Answer factually using [Most Recent Strum Fact].")
 		}
 	} else {
-		lines = append(lines, "[Instruction]: The student is asking a conversational question or checking the microphone (e.g. 'Can you hear me?', 'Who are you?', 'How are you?'). Respond directly, naturally, and warmly to their question. Do NOT mention guitar strums, practice, or chords.")
+		lines = append(lines, "[Instruction]: The student is asking a conversational question or checking the mic (e.g. 'Can you hear me?', 'Who are you?'). Respond directly, naturally, and warmly. Do NOT mention guitar strums, practice, or chords.")
 	}
 	lines = append(lines, fmt.Sprintf("[Student says]: %s", transcript))
 

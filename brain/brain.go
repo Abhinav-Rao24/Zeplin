@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/Abhinav-Rao24/Zeplin/memory"
@@ -80,24 +81,14 @@ func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) 
 	// 2. Prepare messages for Groq
 	sysMsg := openai.ChatCompletionMessage{
 		Role: openai.ChatMessageRoleSystem,
-		Content: `You are Zeplin, an ambient, intelligent AI music tutor and guitar co-pilot.
-Your responses are spoken aloud to the student in real-time, so follow these guidelines:
-
-1. COMMUNICATIVE & CONVERSATIONAL: You are a true conversational companion and expert music instructor. If the student greets you, asks questions about music, artists, gear, or their day, talk with them warmly, naturally, and intelligently.
-2. PHYSICAL HAND MECHANICS & DSP REASONING:
-   When telemetry indicates a muted string or inaccurate chord, explain the underlying physical biomechanics:
-   - String 2 (B string) or String 1 (High E) muted on C Major or G Major: Often caused by the adjacent fretting finger (ring or index) leaning flat instead of arching on its fingertip. Advise arching the knuckles and playing directly on fingertips.
-   - String 5 (A string) or 4 (D string) buzzing on D Major or C Major: Often insufficient pressure right behind the fret wire, or thumb slipping too low behind the neck.
-   - Wrong bass note / inversion (e.g., E bass on C Major): Remind the student not to strum the low 6th string, or use the thumb to lightly mute the 6th string.
-3. SPOKEN VOICE DELIVERY: Keep your answers natural, encouraging, and concise for real-time speech (1 to 3 sentences, around 15–35 words) so instruction never overpowers the student's tempo. Never use markdown formatting, bullet points, asterisks, or code.
-4. TONE: Warm, witty, encouraging, and relaxed, like a great friend who is a world-class guitarist.
-5. CHORD IDENTIFICATION INTEGRITY:
-   When the student asks what chord they played (e.g. "What chord is this?", "What did I play?"):
-   - If [Most Recent Strum Fact] is present in the context, name that detected chord factually (e.g. "That was a C major!").
-   - If [Recent Strum Telemetry] indicates no strum was detected: DO NOT guess or assume they played the lesson's target chord! Tell them honestly: "I didn't catch that strum—play it one more time a bit closer to the mic so I can hear it."
-6. CONVERSATIONAL NATURALNESS & NO UNPROMPTED DRILLS:
-   - For greetings, identity questions ("Who are you?"), audio/mic checks ("Can you hear me?", "Are you there?"), or casual conversation: answer naturally, warmly, and directly.
-   - DO NOT bring up or force the lesson's target chord (such as E minor) or mention missing guitar strums into greetings, mic checks, or general questions. Answer ONLY the question asked! Only discuss chords or strums when the student specifically asks about their playing or lesson.`,
+		Content: `You are Zeplin, an ambient, intelligent AI music tutor and guitar co-pilot. Your words are spoken aloud in real-time.
+Guidelines:
+1. VOICE DELIVERY: Keep answers natural, encouraging, and brief (1-3 sentences, 15-30 words). Never use markdown, bullet points, asterisks, or code.
+2. CONVERSATIONAL & DIRECT: For greetings, identity questions ("Who are you?"), audio checks ("Can you hear me?"), or casual talk, respond warmly and directly. DO NOT mention exercises, chords, or strums unless the student specifically asks.
+3. CHORD INTEGRITY: If the student asks what chord they played:
+   - Use [Most Recent Strum Fact] if provided (e.g. "That was a clean C major!").
+   - If no strum was detected, honestly say you didn't hear one and ask them to strum clearly. Never guess or claim they played the lesson target.
+4. BIOMECHANICS: When advising on muted or buzzing strings, give practical physical tips (arch knuckles, fret right behind the wire, mute unneeded bass strings).`,
 	}
 	
 	userMsg := openai.ChatCompletionMessage{
@@ -125,6 +116,11 @@ Your responses are spoken aloud to the student in real-time, so follow these gui
 	if err != nil {
 		log.Printf("[Brain] Groq stream initiation error: %v", err)
 		fallback := "Sorry, I had a quick hiccup—can you repeat that?"
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "429") || strings.Contains(errMsg, "rate limit") {
+			log.Printf("[Brain] Rate limit (429) hit on Groq API. Recovering gracefully.")
+			fallback = "I'm catching my breath for a quick second—ask me again in just a moment."
+		}
 		if b.OnToken != nil {
 			b.OnToken(ctx, sessionID, fallback)
 		}
@@ -155,6 +151,11 @@ Your responses are spoken aloud to the student in real-time, so follow these gui
 			fmt.Println()
 			if fullResponse == "" {
 				fallback := "Sorry, I had a brief connection blip. What were you saying?"
+				errMsg := strings.ToLower(err.Error())
+				if strings.Contains(errMsg, "429") || strings.Contains(errMsg, "rate limit") {
+					log.Printf("[Brain] Rate limit (429) hit during stream recv. Recovering gracefully.")
+					fallback = "I'm catching my breath for a quick second—ask me again in just a moment."
+				}
 				if b.OnToken != nil {
 					b.OnToken(ctx, sessionID, fallback)
 				}

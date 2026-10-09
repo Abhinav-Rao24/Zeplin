@@ -130,9 +130,9 @@ func (s *SQLiteStore) Close() error {
 
 // Read retrieves conversation turns for a session from the conversation_turns table.
 func (s *SQLiteStore) Read(ctx context.Context, sessionID string) ([]openai.ChatCompletionMessage, error) {
-	// Retrieve latest 6 turns in chronological order (sliding window to prevent prompt token explosion)
+	// Retrieve latest 4 turns in chronological order (sliding window to prevent prompt token explosion)
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT role, content FROM (SELECT id, role, content FROM conversation_turns WHERE session_id = ? ORDER BY id DESC LIMIT 6) ORDER BY id ASC",
+		"SELECT role, content FROM (SELECT id, role, content FROM conversation_turns WHERE session_id = ? ORDER BY id DESC LIMIT 4) ORDER BY id ASC",
 		sessionID,
 	)
 	if err != nil {

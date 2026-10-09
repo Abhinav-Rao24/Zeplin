@@ -1,4 +1,4 @@
-package transport
+﻿package transport
 
 import (
 	"context"
@@ -58,7 +58,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 	// Typed agent state machine. Replaces the old pair of isBrainActive / isPacingActive
 	// atomic.Bool flags with a single, explicitly-typed state for clearer reasoning.
-	//   StateListening → StateThinking → StateSpeaking → StateListening
+	//   StateListening â†’ StateThinking â†’ StateSpeaking â†’ StateListening
 	sm := &AgentStateMachine{}
 
 	telemetryRegistry := NewTelemetryRegistry()
@@ -101,16 +101,16 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							return
 						}
 
-						// ── Software Echo Guard ────────────────────────────────────────────────
+						// â”€â”€ Software Echo Guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 						// When the agent is actively playing audio (StateSpeaking), an incoming
 						// STT transcript might be the bot's own voice looping back through the
 						// mic after bypassing the browser's AEC hardware filter.
 						//
 						// We compare the transcript's word set against the rolling buffer of
 						// recently spoken TTS tokens. If >40 % of the transcript's words appear
-						// in the buffer, it is almost certainly acoustic self-echo — drop it.
+						// in the buffer, it is almost certainly acoustic self-echo â€” drop it.
 						// If the overlap is low, a real human is speaking and we allow barge-in.
-						// ──────────────────────────────────────────────────────────────────────
+						// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 						if sm.Is(StateSpeaking) {
 							recentSpoken := ttsEngine.RecentSpokenText()
 							overlap := echoOverlapRatio(transcript, recentSpoken)
@@ -121,7 +121,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						}
 
 						if !isFinal {
-							// Interim transcripts are unreliable noise sources — do NOT trigger
+							// Interim transcripts are unreliable noise sources â€” do NOT trigger
 							// a hard barge-in here. The VAD layer handles real-time interruption
 							// with a sustained-voice threshold to prevent false positives.
 							return
@@ -186,8 +186,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					pcm48Buf := make([]int16, 5760) // up to 120ms at 48kHz mono
 					var vadBuffer []byte
 					consecutivePositive := 0
+					packetCount := 0
 
-					// RTP read loop: decodes Opus → sends 16kHz PCM to Deepgram STT and WebRTC VAD.
+					// RTP read loop: decodes Opus â†’ sends 16kHz PCM to Deepgram STT and WebRTC VAD.
 					go func() {
 						defer sttEngine.Close()
 
@@ -202,12 +203,18 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								continue
 							}
 
+							packetCount++
+							if packetCount == 1 || packetCount%200 == 0 {
+								log.Printf("[Audio] RTP packets received from %s: %d (payload=%d bytes)", sessionID, packetCount, len(rtpPacket.Payload))
+							}
+
 							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcm48Buf)
 							if err != nil {
+								log.Printf("[Audio] Opus decode error (packet %d): %v", packetCount, err)
 								continue
 							}
 
-							// Downsample 48kHz mono → 16kHz mono (decimate by 3 with 3-sample average)
+							// Downsample 48kHz mono â†’ 16kHz mono (decimate by 3 with 3-sample average)
 							outSamples := sampleCount / 3
 							if outSamples == 0 {
 								continue
@@ -239,6 +246,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 								if activeVoice {
 									consecutivePositive++
+									if consecutivePositive == 1 { log.Printf(`[VAD] Voice detected from %s`, sessionID) }
 									if orch != nil {
 										orch.SetSpeechActive(sessionID, true)
 									}
@@ -301,7 +309,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 		})
 	}
 
-	// Initialize the outbound audio track (PCMU / μ-law at 8 kHz mono).
+	// Initialize the outbound audio track (PCMU / Î¼-law at 8 kHz mono).
 	capability := webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypePCMU,
 		ClockRate: 8000,
@@ -407,7 +415,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						sm.Set(StateSpeaking)
 					}
 
-					// μ-law: 1 byte per sample at 8000 Hz.
+					// Î¼-law: 1 byte per sample at 8000 Hz.
 					durationMs := float64(len(frame)) / 8000.0 * 1000.0
 					duration := time.Duration(durationMs) * time.Millisecond
 
@@ -491,3 +499,4 @@ func transitionToListening(sm *AgentStateMachine, registry *TelemetryRegistry) {
 		sm.Set(StateListening)
 	}
 }
+

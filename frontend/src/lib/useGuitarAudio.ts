@@ -38,12 +38,19 @@ export function useGuitarAudio() {
 
   const startSession = useCallback(async () => {
     try {
-      // 1. Single microphone acquisition through LiveKit
-      const localAudioTrack = await LiveKit.createLocalAudioTrack({
-        echoCancellation: true,
-        noiseSuppression: false,
-        autoGainControl: true,
+      // 1. Acquire raw mic via getUserMedia so the track stays alive the whole time.
+      //    This is the single source of truth — we hand it to both DSP and LiveKit.
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,   // keep ON on Windows — disabling it drops AGC and kills VAD
+          autoGainControl: true,
+          sampleRate: 48000,
+        },
       });
+      const rawTrack = micStream.getAudioTracks()[0];
+      // Wrap in a LiveKit LocalAudioTrack (userProvidedTrack=true means LiveKit won't stop it)
+      const localAudioTrack = new LiveKit.LocalAudioTrack(rawTrack, undefined, true);
       localTrackRef.current = localAudioTrack;
 
       // 2. AudioContext at 48kHz for local DSP chord recognition
@@ -51,7 +58,7 @@ export function useGuitarAudio() {
       audioCtxRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-      // 3. Feed the single mic stream to DSP worklet
+      // 3. Feed the same mic stream to DSP worklet
       try {
         await audioCtx.audioWorklet.addModule('/worklet/guitar-dsp-processor.js');
         const dspNode = new AudioWorkletNode(audioCtx, 'guitar-dsp-processor', {
@@ -61,7 +68,6 @@ export function useGuitarAudio() {
         });
         dspNodeRef.current = dspNode;
 
-        const micStream = new MediaStream([localAudioTrack.mediaStreamTrack]);
         const source = audioCtx.createMediaStreamSource(micStream);
         source.connect(dspNode);
 
@@ -195,77 +201,12 @@ export function useGuitarAudio() {
         }));
       }
 
-      // 5. Browser Speech Recognition (Listen to student questions in parallel)
-      const win = window as unknown as {
-        SpeechRecognition?: new () => {
-          continuous: boolean;
-          interimResults: boolean;
-          lang: string;
-          start: () => void;
-          stop: () => void;
-          onresult: (ev: {
-            resultIndex: number;
-            results: { length: number; [index: number]: { [index: number]: { transcript: string } } };
-          }) => void;
-          onerror: (err: unknown) => void;
-        };
-        webkitSpeechRecognition?: new () => {
-          continuous: boolean;
-          interimResults: boolean;
-          lang: string;
-          start: () => void;
-          stop: () => void;
-          onresult: (ev: {
-            resultIndex: number;
-            results: { length: number; [index: number]: { [index: number]: { transcript: string } } };
-          }) => void;
-          onerror: (err: unknown) => void;
-        };
-      };
-
-      const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        try {
-          const rec = new SpeechRecognition();
-          rec.continuous = true;
-          rec.interimResults = true;
-          rec.lang = 'en-US';
-
-          rec.onresult = (ev) => {
-            let transcript = '';
-            for (let i = ev.resultIndex; i < ev.results.length; ++i) {
-              transcript += ev.results[i][0].transcript;
-            }
-            const clean = transcript.trim();
-            if (clean) {
-              console.log('[Student Speech]:', clean);
-              setState((prev) => ({ ...prev, userSpeech: clean }));
-
-              if (
-                roomRef.current &&
-                roomRef.current.state === LiveKit.ConnectionState.Connected
-              ) {
-                try {
-                  roomRef.current.localParticipant.publishData(
-                    new TextEncoder().encode(
-                      JSON.stringify({ event: 'student_speech', text: clean })
-                    ),
-                    { reliable: true }
-                  );
-                } catch (err) {
-                  console.error('Failed to forward speech:', err);
-                }
-              }
-            }
-          };
-
-          rec.onerror = () => {};
-          rec.start();
-          recognitionRef.current = rec;
-        } catch (recErr) {
-          console.warn('SpeechRecognition notice:', recErr);
-        }
-      }
+      // Note: Browser SpeechRecognition is intentionally not used here.
+      // It conflicts with our getUserMedia mic stream on Chrome/Windows.
+      // All speech-to-text is handled server-side by Deepgram STT via the
+      // LiveKit audio track, which fires transcript callbacks and routes them
+      // through the orchestrator brain via orch.HandleSpeech.
+      console.log('[Zeplin] Mic active. Speaking into Deepgram STT via LiveKit RTP pipeline.');
     } catch (err) {
       console.error('Failed to start guitar session:', err);
       setState((prev) => ({

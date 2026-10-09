@@ -283,4 +283,11 @@ export const CHORD_LIBRARY: Record<string, ChordData> = {
   },
 };
 
-export const LESSON_SEQUENCE = ['G_Major', 'C_Major', 'D_Major'];
+export const LESSON_SEQUENCE = [
+  'E_Minor',
+  'A_Minor',
+  'G_Major',
+  'C_Major',
+  'D_Major',
+  'E_Major',
+];

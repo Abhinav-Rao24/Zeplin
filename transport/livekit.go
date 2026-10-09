@@ -348,6 +348,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 			log.Printf("Error flushing TTS: %v", err)
 		}
 	}
+	brainInstance.OnComplete = func(ctx context.Context, sessionID string, fullText string) {
+		if orch != nil {
+			orch.PublishFeedback(sessionID, fullText)
+		}
+	}
 
 	// Outbound audio pacer loop: pulls PCMU frames from the TTS engine and writes
 	// them to the LiveKit track at exactly the right 20ms cadence.

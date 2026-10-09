@@ -9,9 +9,9 @@ interface ChordDiagramProps {
 }
 
 export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus = [] }) => {
-  const width = 200;
-  const height = 190;
-  const margin = { top: 28, left: 24, right: 24, bottom: 22 };
+  const width = 230;
+  const height = 210;
+  const margin = { top: 32, left: 32, right: 32, bottom: 20 };
 
   const gridWidth = width - margin.left - margin.right;
   const gridHeight = height - margin.top - margin.bottom;
@@ -21,23 +21,21 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
   const stringSpacing = gridWidth / (numStrings - 1);
   const fretSpacing = gridHeight / numFrets;
 
-  const stringLabels = ['E', 'A', 'D', 'G', 'B', 'e'];
-
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center select-none">
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        className="w-full max-w-[210px] h-auto select-none"
+        className="w-full max-w-[240px] h-auto"
         xmlns="http://www.w3.org/2000/svg"
       >
         {/* Top Nut Bar (Thick horizontal bar representing fret 0) */}
         <rect
-          x={margin.left - 1}
-          y={margin.top - 3}
-          width={gridWidth + 2}
-          height={4}
+          x={margin.left - 1.5}
+          y={margin.top - 4}
+          width={gridWidth + 3}
+          height={5}
           fill="#1C2420"
-          rx={1}
+          rx={1.5}
         />
 
         {/* Fret Grid Lines (Horizontal frets) */}
@@ -51,7 +49,7 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
               y1={y}
               x2={margin.left + gridWidth}
               y2={y}
-              stroke="#D3D0C8"
+              stroke="#2B3630"
               strokeWidth="1.2"
             />
           );
@@ -67,8 +65,8 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
               y1={margin.top}
               x2={x}
               y2={margin.top + gridHeight}
-              stroke="#B3B0A6"
-              strokeWidth={s === 0 ? '1.8' : s === 5 ? '1.0' : '1.3'}
+              stroke="#2B3630"
+              strokeWidth={s === 0 ? '1.8' : s === 5 ? '1.1' : '1.3'}
             />
           );
         })}
@@ -85,9 +83,9 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
               <text
                 key={`mute-${s}`}
                 x={x}
-                y={margin.top - 10}
-                fill="#8C887E"
-                fontSize="12"
+                y={margin.top - 12}
+                fill="#2B3630"
+                fontSize="13"
                 fontWeight="700"
                 textAnchor="middle"
               >
@@ -100,14 +98,14 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
               <g key={`open-${s}`}>
                 <circle
                   cx={x}
-                  cy={margin.top - 12}
-                  r="4.5"
+                  cy={margin.top - 14}
+                  r="5"
                   fill="none"
-                  stroke={isProblemMuted ? '#DC2626' : '#6A726C'}
-                  strokeWidth="1.6"
+                  stroke={isProblemMuted ? '#DC2626' : '#2B3630'}
+                  strokeWidth="1.8"
                 />
                 {isProblemMuted && (
-                  <circle cx={x} cy={margin.top - 12} r="2.5" fill="#DC2626" />
+                  <circle cx={x} cy={margin.top - 14} r="2.5" fill="#DC2626" />
                 )}
               </g>
             );
@@ -129,18 +127,18 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
               <circle
                 cx={x}
                 cy={y}
-                r="10"
-                fill={isProblem ? '#DC2626' : '#3E5C4E'}
-                stroke={isProblem ? '#FCA5A5' : '#4E7262'}
+                r="11"
+                fill={isProblem ? '#DC2626' : '#244230'}
+                stroke={isProblem ? '#FCA5A5' : '#2E523C'}
                 strokeWidth="1.5"
-                filter="drop-shadow(0 1px 2px rgba(0,0,0,0.15))"
+                filter="drop-shadow(0 2px 3px rgba(0,0,0,0.12))"
               />
               {finger > 0 && (
                 <text
                   x={x}
-                  y={y + 3.5}
+                  y={y + 4}
                   fill="#FFFFFF"
-                  fontSize="9.5"
+                  fontSize="11"
                   fontWeight="700"
                   textAnchor="middle"
                 >
@@ -148,24 +146,6 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({ chord, stringStatus 
                 </text>
               )}
             </g>
-          );
-        })}
-
-        {/* String Labels (E A D G B e below grid) */}
-        {stringLabels.map((lbl, s) => {
-          const x = margin.left + s * stringSpacing;
-          return (
-            <text
-              key={`label-${s}`}
-              x={x}
-              y={margin.top + gridHeight + 14}
-              fill="#8F8C82"
-              fontSize="9"
-              fontWeight="600"
-              textAnchor="middle"
-            >
-              {lbl}
-            </text>
           );
         })}
       </svg>

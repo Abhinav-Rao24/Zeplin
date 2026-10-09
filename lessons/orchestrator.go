@@ -396,6 +396,12 @@ func (o *Orchestrator) speakCooled(text string) {
 	go o.speak(text) // non-blocking to avoid holding the mutex during TTS I/O
 }
 
+// PublishFeedback pushes conversational text or tip to the UI.
+func (o *Orchestrator) PublishFeedback(sessionID string, feedback string) {
+	sess := o.GetOrCreateSession(sessionID)
+	o.publishState(sess, dsp.ChordEvent{}, feedback)
+}
+
 func (o *Orchestrator) publishState(sess *LessonSession, evt dsp.ChordEvent, feedback string) {
 	if o.publisher == nil {
 		return

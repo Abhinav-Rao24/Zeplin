@@ -20,9 +20,10 @@ type turnState struct {
 // Brain coordinates the conversational LLM brain.
 type Brain struct {
 	client  *openai.Client
-	store   memory.MemoryStore
-	OnToken func(ctx context.Context, sessionID string, token string)
-	OnFlush func(ctx context.Context, sessionID string)
+	store      memory.MemoryStore
+	OnToken    func(ctx context.Context, sessionID string, token string)
+	OnFlush    func(ctx context.Context, sessionID string)
+	OnComplete func(ctx context.Context, sessionID string, fullText string)
 
 	mu          sync.Mutex
 	activeTurns map[string]*turnState
@@ -79,22 +80,13 @@ func (b *Brain) ProcessTurn(ctx context.Context, sessionID string, text string) 
 	// 2. Prepare messages for Groq
 	sysMsg := openai.ChatCompletionMessage{
 		Role: openai.ChatMessageRoleSystem,
-		Content: `You are Zeplin, a real-time guitar teacher. Your responses will be spoken aloud immediately, so follow these rules strictly:
+		Content: `You are Zeplin, an intelligent, communicative AI companion and guitar co-pilot.
+Your responses are spoken aloud to the student in real-time, so follow these guidelines:
 
-1. BREVITY: Maximum 20 words per response. Never use long sentences.
-2. SPECIFICITY: You receive structured lesson context (target chord, streak count, recurring mistakes). Reference it directly — never speak in generalities.
-3. ACTIONABLE: Every feedback must contain exactly one physical action the student can do right now.
-4. NO REPETITION: If you said the same thing twice, find a different angle.
-5. TONE: Calm, encouraging, direct. Like a patient guitar teacher at their side.
-
-Good examples:
-- "Perfect G major. Now move your ring finger to the third fret of low E for the transition."
-- "Your B string is muted. Try arching your index finger more at the knuckle."
-- "That's E minor, not A minor. Check your second and third fingers on the A and D strings."
-
-Bad examples (too long, too vague):
-- "Great job! Keep practicing and you'll get better over time!"
-- "That wasn't quite right, try again."`,
+1. COMMUNICATIVE & CONVERSATIONAL: You are a true conversational companion, not just a rigid teacher. If the student greets you, asks questions about music, artists, guitar gear, their day, or chats about anything, talk with them warmly, naturally, and intelligently!
+2. GUITAR COACHING: When the student asks about chords, finger placement, technique, or practice, give clear, encouraging, and physically actionable tips.
+3. SPOKEN VOICE DELIVERY: Keep your answers natural and conversational for real-time speech (1 to 3 sentences, around 15–35 words) so it sounds fluid and friendly when spoken. Never use markdown formatting, bullet points, or code.
+4. TONE: Warm, witty, encouraging, and relaxed, like a great friend who happens to be an incredible guitarist.`,
 	}
 	
 	userMsg := openai.ChatCompletionMessage{
@@ -160,6 +152,9 @@ Bad examples (too long, too vague):
 
 	// 4. Save to memory if response is not empty
 	if fullResponse != "" {
+		if b.OnComplete != nil {
+			b.OnComplete(ctx, sessionID, fullResponse)
+		}
 		assistantMsg := openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleAssistant,
 			Content: fullResponse,

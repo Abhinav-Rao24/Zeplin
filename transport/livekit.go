@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Abhinav-Rao24/Zeplin/brain"
@@ -181,14 +180,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					}
 
 					var (
-						transcriptMu          sync.Mutex
-						interimTimer          *time.Timer
-						pendingText           string
-						activeTurnID          uint64
-						lastFinalizedText     string
-						speakingTurnActive    bool
-						lastVoiceNano         atomic.Int64
-						lastTurnCompletedNano atomic.Int64
+						transcriptMu      sync.Mutex
+						interimTimer      *time.Timer
+						hardLimitTimer    *time.Timer
+						pendingText       string
+						activeTurnID      uint64
+						lastFinalizedText string
 					)
 
 					finalizeAndDispatchTurn := func(text string) {
@@ -197,31 +194,27 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							return
 						}
 
-						// 1. Reset stability timer explicitly on finalization
+						// 1. Explicitly stop and reset all timers on finalization
 						if interimTimer != nil {
 							interimTimer.Stop()
 							interimTimer = nil
 						}
+						if hardLimitTimer != nil {
+							hardLimitTimer.Stop()
+							hardLimitTimer = nil
+						}
 						pendingText = ""
 
-						// 2. Transcript Turn Invalidation & Deduplication:
-						// If text matches or prefixes what was already finalized:
-						// Only allow if speaking has finished AND new human speech occurred after the turn ended!
+						// 2. Utterance Deduplication:
+						// If text matches or prefixes what was already finalized, discard immediately.
 						if isStaleOrPrefix(text, lastFinalizedText) {
-							lastTurnDone := lastTurnCompletedNano.Load()
-							lastVoice := lastVoiceNano.Load()
-							now := time.Now().UnixNano()
-							// Reject if currently speaking OR no new vocal energy occurred after the previous turn finished!
-							if speakingTurnActive || lastTurnDone == 0 || lastVoice <= lastTurnDone+int64(1*time.Second) || (now-lastTurnDone) < int64(3*time.Second) {
-								log.Printf("[STT Guard] Dropped duplicate/trailing STT packet: %q (already finalized: %q)", text, lastFinalizedText)
-								return
-							}
+							log.Printf("[STT Guard] Discarding duplicate/trailing STT packet for already finalized turn: %q (already finalized: %q)", text, lastFinalizedText)
+							return
 						}
 
 						activeTurnID++
 						thisTurnID := activeTurnID
 						lastFinalizedText = text
-						speakingTurnActive = true
 
 						localInterrupt()
 						go func(t string, tID uint64) {
@@ -248,17 +241,6 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								sm.Set(StateListening)
 							}
 							log.Printf("[Brain] Turn ended (TurnID=%d). Agent state: %s", tID, sm.Get())
-
-							lastTurnCompletedNano.Store(time.Now().UnixNano())
-
-							// Allow playback and trailing STT packets to settle before resetting speakingTurnActive
-							time.Sleep(3 * time.Second)
-							transcriptMu.Lock()
-							if activeTurnID == tID {
-								speakingTurnActive = false
-								// Keep lastFinalizedText preserved to block delayed Deepgram flushes forever!
-							}
-							transcriptMu.Unlock()
 						}(text, thisTurnID)
 					}
 
@@ -272,10 +254,11 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						transcriptMu.Lock()
 						defer transcriptMu.Unlock()
 
-						// 1. Transcript Turn Invalidation:
-						// If this transcript corresponds to the active or recently finalized turn,
-						// do NOT process it and do NOT trigger barge-in!
-						if isStaleOrPrefix(transcript, lastFinalizedText) && speakingTurnActive {
+						// 1. Utterance Deduplication:
+						// If this transcript corresponds to the already finalized utterance,
+						// DISCARD IT IMMEDIATELY. This completely stops Deepgram's delayed
+						// isFinal:true packets from triggering duplicate responses!
+						if isStaleOrPrefix(transcript, lastFinalizedText) {
 							return
 						}
 
@@ -292,58 +275,61 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							localInterrupt()
 						}
 
-						// 3. Final vs Interim Handling
+						// 3. Final vs Interim Handling:
+						// If Deepgram emits isFinal: true, finalize immediately
 						if isFinal {
 							finalizeAndDispatchTurn(transcript)
 							return
 						}
 
-						// Interim transcript:
-						// Reset stability timer on each new incoming interim text
+						// 4. Decoupled 750ms Text Stability Timer:
+						// Tracks transcript text ONLY. If words have not changed from pendingText, let the timer keep ticking down.
+						if transcript == pendingText && interimTimer != nil {
+							return
+						}
+
 						pendingText = transcript
 						if interimTimer != nil {
 							interimTimer.Stop()
 						}
-						// 1200ms natural conversational pause tolerance:
-						// Gives students room to breathe, hesitate, or think without being cut off mid-sentence.
-						interimTimer = time.AfterFunc(1200*time.Millisecond, func() {
+						// 750ms stability timer: if words do not change for 750ms, trigger response immediately!
+						interimTimer = time.AfterFunc(750*time.Millisecond, func() {
 							transcriptMu.Lock()
 							textToFire := pendingText
-							interimTimer = nil
-
-							if textToFire == "" {
-								transcriptMu.Unlock()
-								return
-							}
-
-							// VAD Acoustic Silence Gate:
-							// Verify the student has actually stopped speaking vocally (at least 600ms of quiet).
-							// If vocal energy was detected within the last 600ms, the user is still vocalizing or breathing;
-							// postpone finalization rather than cutting them off!
-							nowNano := time.Now().UnixNano()
-							lastVoice := lastVoiceNano.Load()
-							if lastVoice > 0 && (nowNano-lastVoice) < int64(600*time.Millisecond) {
-								interimTimer = time.AfterFunc(600*time.Millisecond, func() {
-									transcriptMu.Lock()
-									retryText := pendingText
-									interimTimer = nil
-									transcriptMu.Unlock()
-									if retryText != "" {
-										finalizeAndDispatchTurn(retryText)
-									}
-								})
-								transcriptMu.Unlock()
-								return
-							}
-
 							pendingText = ""
+							interimTimer = nil
+							if hardLimitTimer != nil {
+								hardLimitTimer.Stop()
+								hardLimitTimer = nil
+							}
 							transcriptMu.Unlock()
 
-							if !isStaleOrPrefix(textToFire, lastFinalizedText) {
-								log.Printf("[STT Stability Timer] Finalizing interim transcript after pause & VAD silence: %q", textToFire)
+							if textToFire != "" && !isStaleOrPrefix(textToFire, lastFinalizedText) {
+								log.Printf("[STT Stability Timer] Finalizing text after 750ms stability: %q", textToFire)
 								finalizeAndDispatchTurn(textToFire)
 							}
 						})
+
+						// 5. Hard Fallback Ceiling (1.5-second absolute ceiling):
+						// If any transcribed user text has existed for 1.5s, force the turn to finish immediately.
+						if hardLimitTimer == nil {
+							hardLimitTimer = time.AfterFunc(1500*time.Millisecond, func() {
+								transcriptMu.Lock()
+								textToFire := pendingText
+								pendingText = ""
+								if interimTimer != nil {
+									interimTimer.Stop()
+									interimTimer = nil
+								}
+								hardLimitTimer = nil
+								transcriptMu.Unlock()
+
+								if textToFire != "" && !isStaleOrPrefix(textToFire, lastFinalizedText) {
+									log.Printf("[STT Hard Ceiling] Reached 1.5s absolute ceiling, forcing turn: %q", textToFire)
+									finalizeAndDispatchTurn(textToFire)
+								}
+							})
+						}
 					})
 					if err != nil {
 						log.Printf("Error creating STT engine for %s: %v", sessionID, err)
@@ -474,7 +460,6 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								isRealVoice := activeVoice && rms >= minRms
 
 								if isRealVoice {
-									lastVoiceNano.Store(time.Now().UnixNano())
 									consecutivePositive++
 									if consecutivePositive == 1 {
 										log.Printf("[VAD] Voice detected from %s (RMS: %d, speaking: %t)", sessionID, rms, isSpeaking)

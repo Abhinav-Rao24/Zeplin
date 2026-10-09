@@ -343,3 +343,149 @@ func containsStr(s, substr string) bool {
 	})())
 }
 
+// TestMutedStringPhysicalDiagnosis verifies Validation Protocol V4:
+// When a string is muted or buzzing during an otherwise correct shape,
+// the DSP registers it, updates the fretboard with a muted indicator on that string,
+// and gives an explicit physical instruction.
+func TestMutedStringPhysicalDiagnosis(t *testing.T) {
+	var lastUpdate dsp.UIStateUpdate
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {
+		lastUpdate = u
+	})
+
+	sessionID := "student-muted-test"
+	sess := orch.GetOrCreateSession(sessionID)
+	orch.SetTargetChordQuiet(sessionID, "G_Major")
+
+	// Strum G Major with muted B string (confidence 0.74 < 0.78 threshold)
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "G_Major",
+		Confidence:    0.74,
+		BassNote:      "G2",
+	})
+
+	if sess.MistakeLog[MistakeMutedString] != 1 {
+		t.Fatalf("Expected 1 muted string mistake recorded, got %d", sess.MistakeLog[MistakeMutedString])
+	}
+
+	// Verify UI state has 'muted' on index 4 (B string)
+	if len(lastUpdate.StringStatus) != 6 {
+		t.Fatalf("Expected 6 strings in StringStatus, got %d", len(lastUpdate.StringStatus))
+	}
+	if lastUpdate.StringStatus[4] != "muted" {
+		t.Errorf("Expected StringStatus[4] (B string) to be 'muted', got %q", lastUpdate.StringStatus[4])
+	}
+
+	// Verify explicit physical feedback
+	expectedMsg := "Your B string is muted. Arch your fretting finger."
+	if lastUpdate.FeedbackText != expectedMsg {
+		t.Errorf("Expected feedback %q, got %q", expectedMsg, lastUpdate.FeedbackText)
+	}
+}
+
+// TestChordProgressionAndMultimodalSync verifies Validation Protocol V5:
+// Completing the target repetitions smoothly advances to the next chord,
+// updating UI state simultaneously without requiring a page reload.
+func TestChordProgressionAndMultimodalSync(t *testing.T) {
+	var updates []dsp.UIStateUpdate
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {
+		updates = append(updates, u)
+	})
+
+	sessionID := "student-progression"
+	sess := orch.GetOrCreateSession(sessionID)
+
+	// Step 1: E_Minor requires 3 reps
+	if sess.CurrentStep.TargetChord != "E_Minor" {
+		t.Fatalf("Initial target chord should be E_Minor, got %s", sess.CurrentStep.TargetChord)
+	}
+
+	for i := 0; i < 3; i++ {
+		orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+			DetectedChord: "E_Minor",
+			Confidence:    0.95,
+			BassNote:      "E2",
+		})
+	}
+
+	// Should advance to step 2: A_Minor
+	if sess.CurrentStep.TargetChord != "A_Minor" {
+		t.Errorf("Expected target chord to advance to A_Minor, got %s", sess.CurrentStep.TargetChord)
+	}
+	if sess.SuccessStreak != 0 {
+		t.Errorf("Expected streak to reset to 0 upon step advance, got %d", sess.SuccessStreak)
+	}
+
+	// Verify that the final update emitted announces the next chord
+	if len(updates) == 0 {
+		t.Fatalf("Expected UI state updates during chord progression")
+	}
+	last := updates[len(updates)-1]
+	if last.TargetChord != "A_Minor" {
+		t.Errorf("Expected last UI update TargetChord to be A_Minor, got %s", last.TargetChord)
+	}
+}
+
+// TestCumulativePracticeSummaryAndRetrospective verifies practice analytics
+// tracking accuracy and formatting detailed statistics for student queries.
+func TestCumulativePracticeSummaryAndRetrospective(t *testing.T) {
+	orch := NewOrchestrator(nil, nil, func(u dsp.UIStateUpdate) {})
+	sessionID := "student-summary-test"
+	sess := orch.GetOrCreateSession(sessionID)
+
+	// 1. Strum 3 clean times on E_Minor (advances to A_Minor)
+	for i := 0; i < 3; i++ {
+		orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+			DetectedChord: "E_Minor",
+			Confidence:    0.94,
+			BassNote:      "E2",
+		})
+	}
+	// 2. Strum 3 clean times on A_Minor (advances to Step 3: Em -> Am transition)
+	for i := 0; i < 3; i++ {
+		orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+			DetectedChord: "A_Minor",
+			Confidence:    0.94,
+			BassNote:      "A2",
+		})
+	}
+	// 3. Strum 1 clean time on first half of transition (E_Minor)
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "E_Minor",
+		Confidence:    0.94,
+		BassNote:      "E2",
+	})
+	// Total clean so far: 7. Now simulate 2 muted strums and 1 wrong chord
+	for i := 0; i < 2; i++ {
+		orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+			DetectedChord: "A_Minor",
+			Confidence:    0.73, // Muted string issue
+			BassNote:      "A2",
+		})
+	}
+	orch.HandleChordEvent(sessionID, dsp.ChordEvent{
+		DetectedChord: "G_Major", // Wrong chord
+		Confidence:    0.89,
+		BassNote:      "G2",
+	})
+
+	if sess.TotalStrums != 10 {
+		t.Fatalf("Expected 10 total strums, got %d", sess.TotalStrums)
+	}
+	if sess.TotalCorrect != 7 {
+		t.Fatalf("Expected 7 correct strums, got %d", sess.TotalCorrect)
+	}
+
+	summary := sess.FormatPracticeSummary()
+	if !containsStr(summary, "Total Strums: 10") {
+		t.Errorf("Summary missing total strums: %s", summary)
+	}
+	if !containsStr(summary, "Clean Strums: 7") {
+		t.Errorf("Summary missing clean strums: %s", summary)
+	}
+	if !containsStr(summary, "70% accuracy") {
+		t.Errorf("Summary missing accuracy calculation: %s", summary)
+	}
+}
+
+

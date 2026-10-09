@@ -214,3 +214,17 @@ func (s *LessonSession) FormatRecentTelemetry() string {
 	return strings.Join(lines, "\n")
 }
 
+// FormatPracticeSummary formats overall session statistics for retrospective queries.
+func (s *LessonSession) FormatPracticeSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dur := time.Since(s.StartedAt).Round(time.Second)
+	accuracy := 0.0
+	if s.TotalStrums > 0 {
+		accuracy = float64(s.TotalCorrect) / float64(s.TotalStrums) * 100.0
+	}
+	return fmt.Sprintf("Duration: %s | Total Strums: %d | Clean Strums: %d (%.0f%% accuracy)",
+		dur, s.TotalStrums, s.TotalCorrect, accuracy)
+}
+
+

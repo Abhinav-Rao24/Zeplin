@@ -397,6 +397,7 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 	if len(mistakes) > 0 {
 		lines = append(lines, fmt.Sprintf("[Lesson] Recurring issues: %s", formatMistakes(mistakes)))
 	}
+	lines = append(lines, fmt.Sprintf("[Lesson Stats]: %s", sess.FormatPracticeSummary()))
 	lines = append(lines, fmt.Sprintf("[Recent Strum Telemetry (last 5)]:\n%s", sess.FormatRecentTelemetry()))
 	lines = append(lines, fmt.Sprintf("[Student says]: %s", transcript))
 
@@ -486,6 +487,11 @@ func (o *Orchestrator) publishState(sess *LessonSession, evt dsp.ChordEvent, fee
 			update.StringStatus[i] = "ok"
 		}
 	}
+	for _, mutedIdx := range findMutedIssues(evt, targetDef) {
+		if mutedIdx >= 0 && mutedIdx < 6 {
+			update.StringStatus[mutedIdx] = "muted"
+		}
+	}
 	o.publisher(update)
 }
 
@@ -502,7 +508,7 @@ func containsInt(slice []int, val int) bool {
 // A chord matched correctly but with confidence < 0.78 suggests that at
 // least one string is muted or buzzing, reducing harmonic completeness.
 func findMutedIssues(evt dsp.ChordEvent, def *ChordDef) []int {
-	if def == nil {
+	if def == nil || evt.DetectedChord == "" {
 		return nil
 	}
 	if evt.Confidence < 0.78 {

@@ -1,9 +1,10 @@
-﻿package transport
+package transport
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -72,6 +73,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 				if track.Kind() == webrtc.RTPCodecTypeAudio {
 					sessionID := rp.Identity()
 					log.Printf("Audio track subscribed from %s", sessionID)
+					if orch != nil {
+						orch.StartSession(sessionID)
+					}
 
 					triggerInterrupt := func() {
 						// Only interrupt if the agent is actively thinking or speaking.
@@ -164,8 +168,8 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						return
 					}
 
-					// Initialize Opus decoder (48 kHz mono) matching browser microphone.
-					dec, err := opus.NewDecoderWithOutput(48000, 1)
+					// Initialize Opus decoder configured to output 16 kHz mono directly.
+					dec, err := opus.NewDecoderWithOutput(16000, 1)
 					if err != nil {
 						log.Printf("Error creating Opus decoder: %v", err)
 						sttEngine.Close()
@@ -183,12 +187,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						log.Printf("Error setting VAD mode: %v", err)
 					}
 
-					pcm48Buf := make([]int16, 5760) // up to 120ms at 48kHz mono
+					pcm16Buf := make([]int16, 1920) // up to 120ms at 16kHz mono
 					var vadBuffer []byte
 					consecutivePositive := 0
 					packetCount := 0
 
-					// RTP read loop: decodes Opus â†’ sends 16kHz PCM to Deepgram STT and WebRTC VAD.
+					// RTP read loop: decodes Opus directly to 16kHz PCM → sends to Deepgram STT & WebRTC VAD.
 					go func() {
 						defer sttEngine.Close()
 
@@ -204,27 +208,34 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							}
 
 							packetCount++
-							if packetCount == 1 || packetCount%200 == 0 {
-								log.Printf("[Audio] RTP packets received from %s: %d (payload=%d bytes)", sessionID, packetCount, len(rtpPacket.Payload))
-							}
-
-							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcm48Buf)
+							sampleCount, err := dec.DecodeToInt16(rtpPacket.Payload, pcm16Buf)
 							if err != nil {
 								log.Printf("[Audio] Opus decode error (packet %d): %v", packetCount, err)
 								continue
 							}
-
-							// Downsample 48kHz mono â†’ 16kHz mono (decimate by 3 with 3-sample average)
-							outSamples := sampleCount / 3
-							if outSamples == 0 {
+							if sampleCount == 0 {
 								continue
 							}
-							pcm16Bytes := make([]byte, outSamples*2)
-							for i := 0; i+2 < sampleCount; i += 3 {
-								avg := int16((int32(pcm48Buf[i]) + int32(pcm48Buf[i+1]) + int32(pcm48Buf[i+2])) / 3)
-								idx := (i / 3) * 2
-								pcm16Bytes[idx] = byte(avg & 0xff)
-								pcm16Bytes[idx+1] = byte(avg >> 8)
+
+							// Compute RMS energy of decoded frame
+							var sumSq int64
+							for i := 0; i < sampleCount; i++ {
+								s := int64(pcm16Buf[i])
+								sumSq += s * s
+							}
+							rms := int(math.Sqrt(float64(sumSq) / float64(sampleCount)))
+
+							if packetCount == 1 || packetCount%100 == 0 || (rms > 200 && packetCount%20 == 0) {
+								log.Printf("[Audio] Packet %d from %s: payload=%dB, samples=%d, RMS=%d",
+									packetCount, sessionID, len(rtpPacket.Payload), sampleCount, rms)
+							}
+
+							// Convert int16 samples to raw 16kHz little-endian bytes
+							pcm16Bytes := make([]byte, sampleCount*2)
+							for i := 0; i < sampleCount; i++ {
+								s := pcm16Buf[i]
+								pcm16Bytes[2*i] = byte(s & 0xff)
+								pcm16Bytes[2*i+1] = byte(s >> 8)
 							}
 
 							// 1. Forward raw 16kHz signed-16 PCM directly to Deepgram STT
@@ -246,7 +257,9 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 								if activeVoice {
 									consecutivePositive++
-									if consecutivePositive == 1 { log.Printf(`[VAD] Voice detected from %s`, sessionID) }
+									if consecutivePositive == 1 {
+										log.Printf("[VAD] Voice detected from %s (RMS: %d)", sessionID, rms)
+									}
 									if orch != nil {
 										orch.SetSpeechActive(sessionID, true)
 									}
@@ -255,6 +268,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 										vadThreshold = 5
 									}
 									if consecutivePositive >= vadThreshold {
+										log.Printf("[VAD] Triggering interrupt for %s", sessionID)
 										triggerInterrupt()
 									}
 								} else {

@@ -45,6 +45,23 @@ func echoOverlapRatio(candidate, reference string) float64 {
 	return float64(matches) / float64(len(candWords))
 }
 
+// normalizeUtterance cleans punctuation, symbols, and whitespace for transcript comparison.
+func normalizeUtterance(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimRight(s, "?!.,:; ")
+}
+
+// isStaleOrPrefix determines whether an incoming STT transcript is identical to or an
+// incomplete prefix/substring of an already finalized turn utterance.
+func isStaleOrPrefix(candidate, finalized string) bool {
+	cand := normalizeUtterance(candidate)
+	fin := normalizeUtterance(finalized)
+	if cand == "" || fin == "" {
+		return false
+	}
+	return cand == fin || strings.HasPrefix(fin, cand)
+}
+
 // ConnectLiveKit establishes a connection to a LiveKit room, hooks up the STT writer per
 // participant, and publishes the agent's outbound voice track with Deepgram TTS streaming.
 func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance *brain.Brain, ttsEngine *tts.DeepgramStreamTTS, orchestrators ...*lessons.Orchestrator) (*lksdk.Room, error) {
@@ -111,25 +128,42 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						transcriptMu       sync.Mutex
 						interimTimer       *time.Timer
 						pendingText        string
-						lastDispatchedText string
+						activeTurnID       uint64
+						lastFinalizedText  string
+						speakingTurnActive bool
 					)
 
-					dispatchTurn := func(text string) {
+					finalizeAndDispatchTurn := func(text string) {
 						text = strings.TrimSpace(text)
 						if text == "" {
 							return
 						}
-						if text == lastDispatchedText {
+
+						// 1. Reset stability timer explicitly on finalization
+						if interimTimer != nil {
+							interimTimer.Stop()
+							interimTimer = nil
+						}
+						pendingText = ""
+
+						// 2. Transcript Turn Invalidation:
+						// If text is stale or identical to what was already finalized for this turn, drop it.
+						if isStaleOrPrefix(text, lastFinalizedText) && speakingTurnActive {
+							log.Printf("[STT Guard] Dropped redundant finalized text: %q (already finalized: %q)", text, lastFinalizedText)
 							return
 						}
-						lastDispatchedText = text
+
+						activeTurnID++
+						thisTurnID := activeTurnID
+						lastFinalizedText = text
+						speakingTurnActive = true
 
 						localInterrupt()
-						go func(t string) {
+						go func(t string, tID uint64) {
 							telemetryRegistry.SetActiveSession(sessionID)
 							telemetryRegistry.Get(sessionID).StartThinking()
 							sm.Set(StateThinking)
-							log.Printf("[Brain] Turn started for session %s: %q", sessionID, t)
+							log.Printf("[Brain] Turn started (TurnID=%d) for session %s: %q", tID, sessionID, t)
 
 							// Allow 60 ms for stray buffered Groq HTTP tokens to hit the
 							// clearing gate in Speak() and be silently dropped before we
@@ -148,15 +182,17 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							if sm.Is(StateThinking) {
 								sm.Set(StateListening)
 							}
-							log.Printf("[Brain] Turn ended. Agent state: %s", sm.Get())
+							log.Printf("[Brain] Turn ended (TurnID=%d). Agent state: %s", tID, sm.Get())
 
-							time.Sleep(1 * time.Second)
+							// Allow playback and trailing STT packets to settle before resetting speakingTurnActive
+							time.Sleep(3 * time.Second)
 							transcriptMu.Lock()
-							if lastDispatchedText == t {
-								lastDispatchedText = ""
+							if activeTurnID == tID {
+								speakingTurnActive = false
+								lastFinalizedText = ""
 							}
 							transcriptMu.Unlock()
-						}(text)
+						}(text, thisTurnID)
 					}
 
 					// Instantiate STT engine per participant.
@@ -166,16 +202,19 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							return
 						}
 
-						// ── Software Echo Guard ──────────────────────────────────────
-						// When the agent is actively playing audio (StateSpeaking), an incoming
-						// STT transcript might be the bot's own voice looping back through the
-						// mic after bypassing the browser's AEC hardware filter.
-						//
-						// We compare the transcript's word set against the rolling buffer of
-						// recently spoken TTS tokens. If >40 % of the transcript's words appear
-						// in the buffer, it is almost certainly acoustic self-echo — drop it.
-						// If the overlap is low, a real human is speaking and we allow barge-in.
-						// ─────────────────────────────────────────────────────────────
+						transcriptMu.Lock()
+						defer transcriptMu.Unlock()
+
+						// 1. Transcript Turn Invalidation:
+						// If this transcript corresponds to the active or recently finalized turn,
+						// do NOT process it and do NOT trigger barge-in!
+						if isStaleOrPrefix(transcript, lastFinalizedText) {
+							return
+						}
+
+						// 2. Barge-In Text Guard:
+						// Only trigger barge-in during StateSpeaking if the transcript contains
+						// genuine NEW words that do not match recent TTS output (echo guard).
 						if sm.Is(StateSpeaking) {
 							recentSpoken := ttsEngine.RecentSpokenText()
 							overlap := echoOverlapRatio(transcript, recentSpoken)
@@ -183,46 +222,32 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								log.Printf("[Echo Guard] Dropped STT (%.0f%% overlap with recent TTS): %q", overlap*100, transcript)
 								return
 							}
-							log.Printf("[Barge-In] Confirmed speech word from STT: %q", transcript)
+							log.Printf("[Barge-In] Confirmed new speech word from STT: %q", transcript)
 							localInterrupt()
 						}
 
-						transcriptMu.Lock()
-						defer transcriptMu.Unlock()
-
+						// 3. Final vs Interim Handling
 						if isFinal {
-							if interimTimer != nil {
-								interimTimer.Stop()
-								interimTimer = nil
-							}
-							pendingText = ""
-							dispatchTurn(transcript)
+							finalizeAndDispatchTurn(transcript)
 							return
 						}
 
 						// Interim transcript:
-						// If text already dispatched for this turn, ignore.
-						if transcript == lastDispatchedText {
-							return
-						}
-
+						// Reset stability timer on each new incoming interim text
 						pendingText = transcript
 						if interimTimer != nil {
 							interimTimer.Stop()
 						}
-						// 750ms stability timer: finalize interim transcript immediately when speech pauses,
-						// without waiting up to 15 seconds for Deepgram's delayed endpointing isFinal signal.
 						interimTimer = time.AfterFunc(750*time.Millisecond, func() {
 							transcriptMu.Lock()
 							textToFire := pendingText
 							pendingText = ""
 							interimTimer = nil
-							transcriptMu.Unlock()
-
-							if textToFire != "" {
+							if textToFire != "" && !isStaleOrPrefix(textToFire, lastFinalizedText) {
 								log.Printf("[STT Stability Timer] Finalizing interim transcript after 750ms: %q", textToFire)
-								dispatchTurn(textToFire)
+								finalizeAndDispatchTurn(textToFire)
 							}
+							transcriptMu.Unlock()
 						})
 					})
 					if err != nil {

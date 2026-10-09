@@ -176,3 +176,24 @@ func TestPrecisionSpinYieldPacing(t *testing.T) {
 		}
 	}
 }
+
+func TestStaleOrPrefixTurnGuard(t *testing.T) {
+	// Trailing exact match or punctuation differences should be detected as stale
+	if !isStaleOrPrefix("Who are you?", "Who are you") {
+		t.Errorf("expected 'Who are you?' to be stale against 'Who are you'")
+	}
+	if !isStaleOrPrefix("Who are you", "Who are you?") {
+		t.Errorf("expected 'Who are you' to be stale against 'Who are you?'")
+	}
+	// Prefix / partial transcript of the same turn
+	if !isStaleOrPrefix("Who are", "Who are you?") {
+		t.Errorf("expected 'Who are' to be identified as prefix of 'Who are you?'")
+	}
+	// Genuine new words must NOT be detected as stale
+	if isStaleOrPrefix("Wait stop", "Who are you?") {
+		t.Errorf("expected 'Wait stop' to NOT be stale against 'Who are you?'")
+	}
+	if isStaleOrPrefix("What chord was that", "Who are you?") {
+		t.Errorf("expected 'What chord was that' to NOT be stale against 'Who are you?'")
+	}
+}

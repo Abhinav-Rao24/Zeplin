@@ -8,15 +8,25 @@ import { AcousticRings } from '@/components/AcousticRings';
 import { useGuitarAudio } from '@/lib/useGuitarAudio';
 
 export default function AmbientHUDPage() {
-  const { state, isMicMuted, toggleMic, startSession, endSession } = useGuitarAudio();
+  const { state, isMicMuted, toggleMic, changeTargetChord, startSession, endSession } = useGuitarAudio();
 
-  // Active target chord: defaults to A_Minor (matches laptop reference screenshot)
-  // or dynamically tracks orchestrator state.targetChord
-  const currentChordId = state.targetChord || 'A_Minor';
+  // Active target chord: defaults to state.targetChord or 'E_Minor'
+  const currentChordId = state.targetChord || 'E_Minor';
   const chordData: ChordData | null =
-    CHORD_LIBRARY[currentChordId] || CHORD_LIBRARY['A_Minor'] || null;
+    CHORD_LIBRARY[currentChordId] || CHORD_LIBRARY['E_Minor'] || null;
 
   const [hasStarted, setHasStarted] = useState(false);
+
+  // Available beginner chords for one-click switching
+  const quickChords = [
+    { id: 'E_Minor', label: 'Em' },
+    { id: 'A_Minor', label: 'Am' },
+    { id: 'C_Major', label: 'C' },
+    { id: 'G_Major', label: 'G' },
+    { id: 'D_Major', label: 'D' },
+    { id: 'E_Major', label: 'E' },
+    { id: 'A_Major', label: 'A' },
+  ];
 
   // Auto-connect audio session on user's first click or keypress
   const handleUserGesture = () => {
@@ -123,7 +133,7 @@ export default function AmbientHUDPage() {
       {/* ── 2. CENTRAL DYNAMIC CHORD TARGET & FRETBOARD GRID ────────── */}
       <section className="flex flex-col items-center justify-center my-auto w-full max-w-[1100px] mx-auto text-center">
         {/* Central Chord Title & Sub-labels */}
-        <div className="mb-6 sm:mb-8">
+        <div className="mb-4 sm:mb-6">
           {chordData ? (
             <>
               <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-[#F1F3F5]">
@@ -141,6 +151,29 @@ export default function AmbientHUDPage() {
               Say a chord to begin (e.g. &ldquo;Show me G major&rdquo;)
             </p>
           )}
+
+          {/* Quick Chord Selector Pills */}
+          <div className="flex items-center justify-center gap-2 mt-4 flex-wrap">
+            {quickChords.map((qc) => {
+              const isActive = currentChordId === qc.id;
+              return (
+                <button
+                  key={qc.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    changeTargetChord(qc.id);
+                  }}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold tracking-wide transition-all ${
+                    isActive
+                      ? 'bg-[#3B82F6] text-white shadow-[0_0_10px_rgba(59,130,246,0.4)] border border-[#60A5FA]'
+                      : 'bg-[#1E222B] text-[#9CA3AF] hover:bg-[#282D37] hover:text-[#E5E7EB] border border-[#2D3139]'
+                  }`}
+                >
+                  {qc.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* 3. Progressive 6-String Horizontal Fretboard Grid */}

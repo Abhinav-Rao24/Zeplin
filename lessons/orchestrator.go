@@ -412,7 +412,18 @@ func (o *Orchestrator) HandleSpeech(ctx context.Context, sessionID string, trans
 	sess := o.GetOrCreateSession(sessionID)
 
 	var lines []string
-	if isGuitarOrChordInquiry(transcript) {
+	requestedChord := extractRequestedChord(transcript)
+	if requestedChord != "" {
+		o.SetTargetChordQuiet(sessionID, requestedChord)
+		def := ChordByName(requestedChord)
+		display := requestedChord
+		if def != nil {
+			display = def.DisplayName
+		}
+		o.publishState(sess, dsp.ChordEvent{}, fmt.Sprintf("Switched target to %s.", display))
+		lines = append(lines, fmt.Sprintf("[Action]: Target chord successfully changed to %s on student request.", display))
+		lines = append(lines, fmt.Sprintf("[Tutor Instruction]: Confirm the chord switch to %s cheerfully and briefly guide their finger placements.", display))
+	} else if isGuitarOrChordInquiry(transcript) {
 		step := sess.CurrentStep
 		lines = append(lines, fmt.Sprintf("[Lesson]: Exercise: %s (Target: %s, streak %d/%d)",
 			step.Name, displayName(step.TargetChord), sess.SuccessStreak, step.RepsToAdvance))
@@ -581,4 +592,31 @@ func isGuitarOrChordInquiry(text string) bool {
 		}
 	}
 	return false
+}
+
+// extractRequestedChord inspects speech for explicit chord requests (e.g. "show me G major", "switch to A minor", "let's do C major").
+func extractRequestedChord(text string) string {
+	q := strings.ToLower(text)
+	chords := []struct {
+		patterns []string
+		chordID  string
+	}{
+		{[]string{"e minor", "e minor chord", "em chord", "em"}, "E_Minor"},
+		{[]string{"a minor", "a minor chord", "am chord", "am"}, "A_Minor"},
+		{[]string{"c major", "c major chord", "c chord"}, "C_Major"},
+		{[]string{"g major", "g major chord", "g chord"}, "G_Major"},
+		{[]string{"d major", "d major chord", "d chord"}, "D_Major"},
+		{[]string{"e major", "e major chord", "e chord"}, "E_Major"},
+		{[]string{"a major", "a major chord", "a chord"}, "A_Major"},
+		{[]string{"d minor", "d minor chord", "dm chord", "dm"}, "D_Minor"},
+	}
+
+	for _, c := range chords {
+		for _, pat := range c.patterns {
+			if strings.Contains(q, pat) {
+				return c.chordID
+			}
+		}
+	}
+	return ""
 }

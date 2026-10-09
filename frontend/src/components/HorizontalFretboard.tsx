@@ -18,11 +18,13 @@ export const HorizontalFretboard: React.FC<HorizontalFretboardProps> = ({
   const svgWidth = 960;
   const svgHeight = 200;
 
-  const leftMargin = 55; // space for nut indicators (O, X)
+  // Space on left: string names at x=20, nut markers (O, X) at x=52, nut at x=75
+  const stringLabelX = 22;
+  const nutMarkerX = 52;
   const nutWidth = 10;
-  const nutX = leftMargin + 10;
+  const nutX = 72;
   const boardStartX = nutX + nutWidth;
-  const boardEndX = svgWidth - 30;
+  const boardEndX = svgWidth - 25;
   const boardWidth = boardEndX - boardStartX;
 
   const topStringY = 32;
@@ -32,11 +34,15 @@ export const HorizontalFretboard: React.FC<HorizontalFretboardProps> = ({
   const stringSpacing = stringSpanY / (numStrings - 1); // 27.2px
 
   const numFrets = 15;
-  const fretWidth = boardWidth / numFrets; // ~58px per fret
+  const fretWidth = boardWidth / numFrets;
 
   // String gauges (top string is high e, bottom string is low E)
-  // Index in array corresponds to row from top (0 = high e, 5 = low E)
+  // Row 0 = High e, Row 1 = B, Row 2 = G, Row 3 = D, Row 4 = A, Row 5 = Low E
   const stringGauges = [1.4, 1.8, 2.2, 2.7, 3.2, 3.8];
+
+  // String names for each row from top (Row 0 = high e) to bottom (Row 5 = low E)
+  // Standard guitar tuning: e, B, G, D, A, E
+  const stringNames = ['e', 'B', 'G', 'D', 'A', 'E'];
 
   // Inlay marker dots (single at frets 3, 5, 7, 9, 15; double at fret 12)
   const singleDotFrets = [3, 5, 7, 9, 15];
@@ -155,22 +161,39 @@ export const HorizontalFretboard: React.FC<HorizontalFretboardProps> = ({
           const y = topStringY + row * stringSpacing;
           const gauge = stringGauges[row];
           const isMutedIssue = stringStatus[stringIndex] === 'muted';
+          const stringName = stringNames[row];
 
           return (
-            <line
-              key={`string-${row}`}
-              x1={leftMargin}
-              y1={y}
-              x2={boardEndX}
-              y2={y}
-              stroke={isMutedIssue ? '#F59E0B' : '#B8BCC6'}
-              strokeWidth={gauge}
-              opacity={isMutedIssue ? 0.95 : 0.85}
-            />
+            <g key={`string-group-${row}`}>
+              {/* String Name Label on the far left (e, B, G, D, A, E) */}
+              <text
+                x={stringLabelX}
+                y={y}
+                dominantBaseline="central"
+                textAnchor="middle"
+                fontSize="13"
+                fontWeight="700"
+                fontFamily="ui-monospace, monospace, sans-serif"
+                fill={row === 5 || row === 0 ? '#9CA3AF' : '#8E949E'}
+              >
+                {stringName}
+              </text>
+
+              {/* String Wire */}
+              <line
+                x1={nutMarkerX + 10}
+                y1={y}
+                x2={boardEndX}
+                y2={y}
+                stroke={isMutedIssue ? '#F59E0B' : '#B8BCC6'}
+                strokeWidth={gauge}
+                opacity={isMutedIssue ? 0.95 : 0.85}
+              />
+            </g>
           );
         })}
 
-        {/* Nut String Indicators (Left of Nut: 'O' or 'X') */}
+        {/* Nut String Indicators (Between String Name and Nut: 'O' or 'X') */}
         {!isBlank &&
           chord &&
           Array.from({ length: numStrings }).map((_, row) => {
@@ -184,8 +207,9 @@ export const HorizontalFretboard: React.FC<HorizontalFretboardProps> = ({
             return (
               <text
                 key={`nut-marker-${row}`}
-                x={leftMargin - 14}
-                y={y + 5}
+                x={nutMarkerX}
+                y={y}
+                dominantBaseline="central"
                 textAnchor="middle"
                 fontSize={marker === 'O' ? '15' : '14'}
                 fontWeight="700"

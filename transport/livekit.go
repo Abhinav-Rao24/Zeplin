@@ -168,6 +168,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 
 	if orch != nil {
 		orch.SetInterruptHandler(triggerInterrupt)
+		orch.SetStateChecker(sm)
 	}
 
 	roomCB := &lksdk.RoomCallback{
@@ -191,6 +192,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						pendingText       string
 						activeTurnID      uint64
 						lastFinalizedText string
+						turnStartedAt     time.Time
 					)
 
 					finalizeAndDispatchTurn := func(text string) {
@@ -217,9 +219,17 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							return
 						}
 
+						// 3. Acoustic Echo Guard: If the text is acoustic echo of what was recently spoken or being spoken, drop it!
+						recentSpoken := ttsEngine.RecentSpokenText()
+						if isAcousticEcho(text, recentSpoken) {
+							log.Printf("[Echo Guard] Discarding turn dispatch (acoustic echo of recent speech): %q", text)
+							return
+						}
+
 						activeTurnID++
 						thisTurnID := activeTurnID
 						lastFinalizedText = text
+						turnStartedAt = time.Now()
 
 						if sm.Is(StateSpeaking) || sm.Is(StateThinking) {
 							localInterrupt()
@@ -274,10 +284,17 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							transitionToListening(sm, telemetryRegistry)
 						}
 
-						// 2. Final Utterance Handling (MUST NOT DROP):
+						// Check acoustic echo against recent TTS
+						recentSpoken := ttsEngine.RecentSpokenText()
+						isEcho := isAcousticEcho(transcript, recentSpoken)
+
+						// 2. Final Utterance Handling (MUST NOT DROP unless acoustic echo):
 						// When isFinal: true arrives, the user completed their sentence.
-						// It must NEVER be dropped just because StateSpeaking was lingering.
 						if isFinal {
+							if isEcho {
+								log.Printf("[Echo Guard] Dropped final STT (acoustic echo): %q", transcript)
+								return
+							}
 							if sm.Is(StateSpeaking) {
 								log.Printf("[Barge-In] Turn completion arrived while speaking; interrupting agent: %q", transcript)
 								localInterrupt()
@@ -288,12 +305,16 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						}
 
 						// 3. Barge-In Text Guard for Interim Transcripts:
-						// Only trigger barge-in during StateSpeaking if the transcript contains
-						// genuine NEW words that do not match recent TTS output (echo guard).
-						if sm.Is(StateSpeaking) {
-							recentSpoken := ttsEngine.RecentSpokenText()
-							if isAcousticEcho(transcript, recentSpoken) {
+						// Only trigger barge-in during StateSpeaking/StateThinking if:
+						// - At least 600ms have elapsed since turn start (grace period)
+						// - Transcript is NOT acoustic echo
+						if sm.Is(StateSpeaking) || sm.Is(StateThinking) {
+							if isEcho {
 								log.Printf("[Echo Guard] Dropped interim STT (acoustic echo of recent TTS): %q", transcript)
+								return
+							}
+							if time.Since(turnStartedAt) < 600*time.Millisecond {
+								// In grace period right after agent started response, ignore stray interim triggers
 								return
 							}
 							log.Printf("[Barge-In] Confirmed new speech word from STT: %q", transcript)
@@ -489,15 +510,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 									}
 
 									// Layer 3 Barge-In Threshold:
-									// Listening: 3 frames (60 ms)
-									// Speaking: 18 frames (360 ms) of sustained vocal energy
-									vadThreshold := 3
-									if isSpeaking {
-										vadThreshold = 18
-									}
-									if consecutivePositive >= vadThreshold {
-										log.Printf("[VAD] Triggering interrupt for %s (consec=%d, RMS=%d)", sessionID, consecutivePositive, rms)
-										localInterrupt()
+									// When Speaking or Thinking: NEVER allow raw WebRTC VAD energy to barge in,
+									// because speaker acoustic bleed directly trips raw VAD without echo cancellation.
+									// Barge-in during speech is handled exclusively by confirmed STT words (barge-in guard above).
+									// When Listening: 3 frames (60 ms) flags speech active.
+									if !isSpeaking && !sm.Is(StateThinking) && consecutivePositive >= 3 {
+										// Local VAD confirmed speech starting during listening state.
 									}
 								} else {
 									if orch != nil && consecutivePositive > 0 {

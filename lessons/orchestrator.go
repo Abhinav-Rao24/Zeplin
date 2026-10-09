@@ -27,6 +27,11 @@ type Store interface {
 // browser client over the LiveKit DataChannel. Injected at construction.
 type FeedbackPublisher func(update dsp.UIStateUpdate)
 
+// AgentStateChecker allows the Orchestrator to query the current conversational phase.
+type AgentStateChecker interface {
+	IsSpeakingOrThinking() bool
+}
+
 // Orchestrator is the central pedagogical coordinator. It receives two
 // types of input:
 //   - HandleChordEvent: structured DSP telemetry from the browser AudioWorklet
@@ -37,10 +42,11 @@ type FeedbackPublisher func(update dsp.UIStateUpdate)
 // chord evaluation (sub-100ms response, no LLM call per strum) and
 // LLM-backed only for conversational student questions.
 type Orchestrator struct {
-	brain     *brain.Brain
-	tts       *tts.DeepgramStreamTTS
-	publisher FeedbackPublisher
-	store     Store
+	brain        *brain.Brain
+	tts          *tts.DeepgramStreamTTS
+	publisher    FeedbackPublisher
+	store        Store
+	stateChecker AgentStateChecker
 
 	mu       sync.Mutex
 	sessions map[string]*LessonSession // keyed by participant identity
@@ -52,6 +58,13 @@ type Orchestrator struct {
 
 	// OnInterrupt is invoked when a genuine physical strum arrives while the agent is speaking
 	OnInterrupt func(sessionID string)
+}
+
+// SetStateChecker wires the agent conversational state checker.
+func (o *Orchestrator) SetStateChecker(checker AgentStateChecker) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.stateChecker = checker
 }
 
 // SetInterruptHandler wires the barge-in interruption handler.
@@ -234,13 +247,24 @@ func (o *Orchestrator) HandleChordEvent(sessionID string, evt dsp.ChordEvent) {
 		IsCorrect:     isClean,
 	})
 
-	// ── VAD Gate ──────────────────────────────────────────────────────────
-	// Suppress lesson progression and automated feedback while student voice is actively speaking
+	// ── VAD & Conversational Turn Gate ─────────────────────────────────────
+	// Suppress lesson progression and automated feedback while student voice is actively speaking,
+	// or while the agent is engaged in a conversational turn (thinking or speaking).
 	sess.mu.Lock()
 	speechActive := sess.SpeechActive
 	sess.mu.Unlock()
 	if speechActive {
 		log.Printf("[Orchestrator] Chord progression suppressed (speech active): %s", evt.DetectedChord)
+		return
+	}
+
+	o.mu.Lock()
+	checker := o.stateChecker
+	o.mu.Unlock()
+	if checker != nil && checker.IsSpeakingOrThinking() {
+		log.Printf("[Orchestrator] Chord verbal feedback suppressed (conversational turn active): %s", evt.DetectedChord)
+		// Still update visual fretboard status silently without spoken critique
+		o.publishState(sess, evt, "")
 		return
 	}
 

@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { Mic, MicOff } from 'lucide-react';
 import { CHORD_LIBRARY, ChordData } from '@/lib/chords';
 import { HorizontalFretboard } from '@/components/HorizontalFretboard';
 import { AcousticRings } from '@/components/AcousticRings';
 import { useGuitarAudio } from '@/lib/useGuitarAudio';
 
 export default function AmbientHUDPage() {
-  const { state, startSession, endSession } = useGuitarAudio();
+  const { state, isMicMuted, toggleMic, startSession, endSession } = useGuitarAudio();
 
   // Active target chord: defaults to A_Minor (matches laptop reference screenshot)
   // or dynamically tracks orchestrator state.targetChord
@@ -51,11 +52,13 @@ export default function AmbientHUDPage() {
     >
       {/* ── 1. MINIMAL TOP STATUS BAR ───────────────────────────────── */}
       <header className="flex items-start justify-between w-full max-w-[1200px] mx-auto pt-2">
-        {/* Left: Branding & Connection Status */}
-        <div className="flex items-center gap-3">
+        {/* Left: Branding & Connection Status & Dedicated Mic Toggle */}
+        <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
           <span className="text-xs sm:text-sm font-semibold tracking-widest text-[#8E949E] uppercase">
             ZEPLIN // GUITAR CO-PILOT
           </span>
+
+          {/* Connection status pill */}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -65,7 +68,8 @@ export default function AmbientHUDPage() {
                 startSession();
               }
             }}
-            className="flex items-center gap-1.5 text-xs font-medium cursor-pointer transition-opacity hover:opacity-80"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1A1D24] border border-[#2D3139] text-xs font-medium cursor-pointer transition-colors hover:border-[#3E434D]"
+            title={state.connected ? 'Click to disconnect' : 'Click to connect'}
           >
             <span
               className={`w-2 h-2 rounded-full transition-colors ${
@@ -78,6 +82,34 @@ export default function AmbientHUDPage() {
               {state.connected ? 'Connected' : 'Connecting...'}
             </span>
           </button>
+
+          {/* Dedicated Microphone Toggle & Status Button */}
+          {state.connected && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleMic();
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors cursor-pointer ${
+                isMicMuted
+                  ? 'bg-[#2E1A1A] border-[#EF4444]/40 text-[#EF4444] hover:bg-[#3D1E1E]'
+                  : 'bg-[#15271E] border-[#22C55E]/40 text-[#4ADE80] hover:bg-[#1C362A]'
+              }`}
+              title={isMicMuted ? 'Microphone is muted. Click to unmute' : 'Microphone is live. Click to mute'}
+            >
+              {isMicMuted ? (
+                <>
+                  <MicOff size={13} className="text-[#EF4444]" />
+                  <span>MIC MUTED</span>
+                </>
+              ) : (
+                <>
+                  <Mic size={13} className="text-[#4ADE80] animate-pulse" />
+                  <span>MIC ON</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Right: Low-contrast Monospace Telemetry */}

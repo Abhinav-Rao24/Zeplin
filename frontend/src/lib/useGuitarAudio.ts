@@ -271,6 +271,23 @@ export function useGuitarAudio() {
       userSpeech: '',
       feedbackText: 'Session stopped. Click below to start practicing.',
     }));
+    setIsMicMuted(false);
+  }, []);
+
+  const [isMicMuted, setIsMicMuted] = useState(false);
+
+  const toggleMic = useCallback(async () => {
+    if (!localTrackRef.current) return;
+    const currentlyMuted = localTrackRef.current.isMuted;
+    if (currentlyMuted) {
+      await localTrackRef.current.unmute();
+      setIsMicMuted(false);
+      console.log('[LiveKit] Microphone unmuted.');
+    } else {
+      await localTrackRef.current.mute();
+      setIsMicMuted(true);
+      console.log('[LiveKit] Microphone muted.');
+    }
   }, []);
 
   // Web Audio Chord Synthesizer ("Repeat" chord audio)
@@ -351,6 +368,8 @@ export function useGuitarAudio() {
 
   return {
     state,
+    isMicMuted,
+    toggleMic,
     startSession,
     endSession,
     changeTargetChord,

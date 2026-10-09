@@ -49,3 +49,9 @@ func (m *AgentStateMachine) Get() AgentState {
 func (m *AgentStateMachine) Is(s AgentState) bool {
 	return m.Get() == s
 }
+
+// IsSpeakingOrThinking returns true if the agent is actively processing an LLM response or playing audio.
+func (m *AgentStateMachine) IsSpeakingOrThinking() bool {
+	st := m.Get()
+	return st == StateThinking || st == StateSpeaking
+}

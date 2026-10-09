@@ -125,9 +125,12 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						}
 
 						if !isFinal {
-							// Interim transcripts are unreliable noise sources â€” do NOT trigger
-							// a hard barge-in here. The VAD layer handles real-time interruption
-							// with a sustained-voice threshold to prevent false positives.
+							// If agent is speaking and an interim transcript with genuine words arrives:
+							// This is confirmed human speech interrupting the agent!
+							if sm.Is(StateSpeaking) {
+								log.Printf("[Barge-In] Confirmed speech word from interim STT: %q", transcript)
+								triggerInterrupt()
+							}
 							return
 						}
 
@@ -176,14 +179,15 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 						return
 					}
 
-					// Initialize local WebRTC VAD in Mode 2 (sensitive, balanced).
+					// Initialize local WebRTC VAD in Mode 3 (very aggressive) to reject stationary
+					// ambient noise (fans, coolers, air conditioning, room reverberation).
 					vad, err := webrtcvad.New()
 					if err != nil {
 						log.Printf("Error creating local VAD: %v", err)
 						sttEngine.Close()
 						return
 					}
-					if err := vad.SetMode(2); err != nil {
+					if err := vad.SetMode(3); err != nil {
 						log.Printf("Error setting VAD mode: %v", err)
 					}
 
@@ -225,7 +229,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 							}
 							rms := int(math.Sqrt(float64(sumSq) / float64(sampleCount)))
 
-							if packetCount == 1 || packetCount%100 == 0 || (rms > 200 && packetCount%20 == 0) {
+							if packetCount == 1 || packetCount%100 == 0 || (rms > 250 && packetCount%20 == 0) {
 								log.Printf("[Audio] Packet %d from %s: payload=%dB, samples=%d, RMS=%d",
 									packetCount, sessionID, len(rtpPacket.Payload), sampleCount, rms)
 							}
@@ -255,20 +259,34 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 									continue
 								}
 
-								if activeVoice {
+								// Layer 1 Noise Gate: Filter out low-energy ambient noise
+								// (coolers, fans, keyboard taps) so they never falsely trigger speech.
+								isSpeaking := sm.Is(StateSpeaking)
+								minRms := 300
+								if isSpeaking {
+									minRms = 450 // Higher threshold to interrupt while agent speaks
+								}
+
+								isRealVoice := activeVoice && rms >= minRms
+
+								if isRealVoice {
 									consecutivePositive++
 									if consecutivePositive == 1 {
-										log.Printf("[VAD] Voice detected from %s (RMS: %d)", sessionID, rms)
+										log.Printf("[VAD] Voice detected from %s (RMS: %d, speaking: %t)", sessionID, rms, isSpeaking)
 									}
 									if orch != nil {
 										orch.SetSpeechActive(sessionID, true)
 									}
-									vadThreshold := 2
-									if sm.Is(StateSpeaking) {
-										vadThreshold = 5
+
+									// Layer 3 Barge-In Threshold:
+									// Listening: 3 frames (60 ms)
+									// Speaking: 18 frames (360 ms) of sustained vocal energy
+									vadThreshold := 3
+									if isSpeaking {
+										vadThreshold = 18
 									}
 									if consecutivePositive >= vadThreshold {
-										log.Printf("[VAD] Triggering interrupt for %s", sessionID)
+										log.Printf("[VAD] Triggering interrupt for %s (consec=%d, RMS=%d)", sessionID, consecutivePositive, rms)
 										triggerInterrupt()
 									}
 								} else {

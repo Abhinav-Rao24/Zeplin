@@ -452,9 +452,24 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 								pcm16Bytes[2*i+1] = byte(s >> 8)
 							}
 
-							// 1. Forward raw 16kHz signed-16 PCM directly to Deepgram STT
-							if _, err := sttEngine.Write(pcm16Bytes); err != nil {
-								log.Printf("Error writing PCM to Deepgram: %v", err)
+							// ── 1. Server-Side Audio Gating for STT (Speaker Loop Prevention) ───────
+							// If the agent is speaking or in the 250ms acoustic decay tail following speech:
+							// Do NOT stream speaker audio to Deepgram STT, which would cause an infinite echo loop.
+							// EXCEPTION: If the user speaks with high vocal energy (RMS > 800), allow it
+							// through as a deliberate vocal barge-in interrupt.
+							isAgentSpeaking := sm.Is(StateSpeaking)
+							inEchoTail := sm.TimeSinceSpoke() < 250*time.Millisecond
+							isDeliberateBargeIn := rms > 800
+
+							shouldSendToSTT := true
+							if (isAgentSpeaking || inEchoTail) && !isDeliberateBargeIn {
+								shouldSendToSTT = false
+							}
+
+							if shouldSendToSTT {
+								if _, err := sttEngine.Write(pcm16Bytes); err != nil {
+									log.Printf("Error writing PCM to Deepgram: %v", err)
+								}
 							}
 
 							// 2. Feed exact 640-byte (20 ms at 16kHz) chunks to WebRTC VAD
@@ -674,6 +689,7 @@ func ConnectLiveKit(url, apiKey, apiSecret, deepgramAPIKey string, brainInstance
 					if !sm.Is(StateSpeaking) {
 						sm.Set(StateSpeaking)
 					}
+					sm.RecordSpokeNow()
 
 					// Î¼-law: 1 byte per sample at 8000 Hz.
 					durationMs := float64(len(frame)) / 8000.0 * 1000.0

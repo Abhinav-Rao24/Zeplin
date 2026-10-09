@@ -1,6 +1,9 @@
 package transport
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	"time"
+)
 
 // AgentState represents the current conversational phase of the Zeplin agent.
 type AgentState int32
@@ -32,7 +35,8 @@ func (s AgentState) String() string {
 // It replaces the pair of isBrainActive / isPacingActive atomic.Bool flags with a single
 // explicitly-typed state so the entire system can reason about the agent's phase uniformly.
 type AgentStateMachine struct {
-	state atomic.Int32
+	state       atomic.Int32
+	lastSpokeAt atomic.Int64 // UnixNano timestamp of when agent last pushed spoken audio
 }
 
 // Set atomically transitions to the given state.
@@ -54,4 +58,18 @@ func (m *AgentStateMachine) Is(s AgentState) bool {
 func (m *AgentStateMachine) IsSpeakingOrThinking() bool {
 	st := m.Get()
 	return st == StateThinking || st == StateSpeaking
+}
+
+// RecordSpokeNow records the current timestamp as active speech emission.
+func (m *AgentStateMachine) RecordSpokeNow() {
+	m.lastSpokeAt.Store(time.Now().UnixNano())
+}
+
+// TimeSinceSpoke returns the elapsed duration since the agent last emitted spoken audio.
+func (m *AgentStateMachine) TimeSinceSpoke() time.Duration {
+	t := m.lastSpokeAt.Load()
+	if t == 0 {
+		return 1000 * time.Hour
+	}
+	return time.Since(time.Unix(0, t))
 }
